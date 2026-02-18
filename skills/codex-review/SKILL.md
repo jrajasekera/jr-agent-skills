@@ -43,10 +43,10 @@ digraph trigger_decision {
 
 Run from the **project root directory**:
 
-**CRITICAL: This MUST be a single Bash tool invocation.** Shell state (variables) does not persist between Bash calls, so the timeout detection and codex exec must be in the same command.
+**CRITICAL: You MUST set the Bash tool `timeout` parameter to `600000` (10 minutes) to prevent hangs. Run in foreground only — never background.**
 
 ```bash
-TIMEOUT_CMD=""; if command -v timeout >/dev/null 2>&1; then TIMEOUT_CMD="timeout 600"; elif command -v gtimeout >/dev/null 2>&1; then TIMEOUT_CMD="gtimeout 600"; fi; $TIMEOUT_CMD codex exec -C /absolute/path/to/project/root \
+codex exec -C /absolute/path/to/project/root \
     --sandbox read-only \
     --full-auto \
     --skip-git-repo-check \
@@ -54,7 +54,7 @@ TIMEOUT_CMD=""; if command -v timeout >/dev/null 2>&1; then TIMEOUT_CMD="timeout
 ```
 
 **Parameters:**
-- `timeout`/`gtimeout` wrapper: Kill the process after 10 minutes to prevent indefinite hangs. Uses `timeout` on Linux, `gtimeout` on macOS (from `brew install coreutils`), or runs without a timeout if neither is available.
+- **Bash tool timeout**: Set `timeout: 600000` on the Bash tool call to kill the process after 10 minutes if it hangs. This replaces the old `timeout`/`gtimeout` shell wrapper which had zsh compatibility issues.
 - `-C`: Absolute path to project root
 - `--sandbox read-only`: Codex can read but not modify
 - `--full-auto`: No interactive prompts
@@ -172,6 +172,8 @@ digraph error_handling {
 }
 ```
 
+**Note:** Bash tool timeout errors may surface as a tool-level timeout message rather than exit code 124 (which shell `timeout`/`gtimeout` would return). The retry logic still applies either way.
+
 **On persistent failure, ask:**
 ```
 Codex review failed after retry. How would you like to proceed?
@@ -184,11 +186,9 @@ Codex review failed after retry. How would you like to proceed?
 
 | Mistake | Fix |
 |---------|-----|
-| Splitting timeout detection and codex exec into separate Bash calls | Everything must be ONE Bash invocation — variables don't persist between calls |
+| Forgetting to set Bash tool timeout | Always set `timeout: 600000` on the Bash tool call to prevent codex from hanging indefinitely |
 | Running codex from wrong directory | Always use `-C /absolute/path/to/project/root` |
 | Running codex in background | Always run synchronously (no `&`). Background processes cause duplicate output later |
-| Codex hangs indefinitely | The `timeout`/`gtimeout` wrapper kills it after 10 minutes |
-| `timeout` not found (exit code 127) on macOS | Use `gtimeout` from `brew install coreutils`, or omit timeout if neither is available |
 | Writing feedback to file | Capture stdout directly, don't create feedback files |
 | Running extra rounds when only minor concerns remain | Only auto-continue if critical issues were found |
 | Exceeding 3 rounds | Cap at 3 rounds max, even if critical issues persist |

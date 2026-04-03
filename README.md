@@ -1,10 +1,16 @@
 # Claude Skills Collection
 
-A collection of Claude Skills for various tasks and workflows.
+A Claude Code plugin marketplace with skills for API integrations, document processing, and database optimization.
 
-## About
+## Installation
 
-This repository contains custom Claude Skills that can be used to extend Claude's capabilities for specific tasks.
+```bash
+# Add the marketplace
+/plugin marketplace add jrajasekera/claude-skills
+
+# Install the plugin (includes all skills)
+/plugin install claude-skills@claude-skills
+```
 
 ## Available Skills
 
@@ -20,6 +26,9 @@ OpenRouter API integration for unified access to 400+ LLM models from 70+ provid
 ### [pandoc-converter](./skills/pandoc-converter/)
 Convert documents between common formats using Pandoc for consistent output and easy automation.
 
+### [sqlite-optimization](./skills/sqlite-optimization/)
+Optimize SQLite database performance through configuration, schema design, indexing, and query tuning.
+
 ### [venice-ai-api](./skills/venice-ai-api/)
 Venice.ai API integration for privacy-first AI applications including chat, image generation, video, TTS, STT, and embeddings.
 
@@ -30,32 +39,29 @@ Z.ai/ZhipuAI API integration for building applications with GLM models including
 
 ```
 claude-skills/
+├── .claude-plugin/
+│   ├── marketplace.json    # Marketplace registration
+│   └── plugin.json         # Plugin metadata
 ├── skills/                 # All skill folders
 │   ├── article-extractor/
 │   ├── codex-review/
 │   ├── openrouter-api/
 │   ├── pandoc-converter/
+│   ├── sqlite-optimization/
 │   ├── venice-ai-api/
 │   └── z-ai-api/
-├── packaged_skills/        # Packaged .skill files for import
-├── package-skills.sh       # Packaging script
 └── README.md
 ```
 
 Each skill folder contains:
 - `SKILL.md` - Skill documentation and usage instructions
-- `scripts/` - Executable scripts for the skill (if applicable)
+- `scripts/` - Executable scripts (if applicable)
+- `references/` - Detailed reference docs (if applicable)
 
-## Usage
+## Migration from .skill Files
 
-Navigate to the individual skill folders to see specific usage instructions and documentation.
-
-Packaged skills are available in `packaged_skills/` and can be imported directly into Claude.
+If you previously installed skills from the `packaged_skills/` directory, remove those and use the marketplace installation above instead.
 
 ## Author
 
 Created by Jrajasekera
-
----
-
-*Last updated: February 2, 2026*

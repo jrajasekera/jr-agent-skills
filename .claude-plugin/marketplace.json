@@ -1,0 +1,33 @@
+{
+  "name": "claude-skills",
+  "description": "Claude Code skills for API integrations, document processing, and database optimization",
+  "owner": {
+    "name": "Jrajasekera"
+  },
+  "metadata": {
+    "description": "Skills for article extraction, document conversion, SQLite optimization, and API integrations (OpenRouter, Venice.ai, Z.ai)",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "claude-skills",
+      "source": "./",
+      "description": "Skills collection: article extraction, codex review, document conversion, SQLite optimization, and API integrations for OpenRouter, Venice.ai, and Z.ai",
+      "version": "1.0.0",
+      "author": {
+        "name": "Jrajasekera"
+      },
+      "license": "MIT",
+      "keywords": [
+        "skills",
+        "api",
+        "extraction",
+        "conversion",
+        "sqlite",
+        "openrouter",
+        "venice",
+        "z-ai"
+      ]
+    }
+  ]
+}

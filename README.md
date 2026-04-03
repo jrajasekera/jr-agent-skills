@@ -6,10 +6,10 @@ A Claude Code plugin marketplace with skills for API integrations, document proc
 
 ```bash
 # Add the marketplace
-/plugin marketplace add jrajasekera/claude-skills
+/plugin marketplace add jrajasekera/jr-agent-skills
 
 # Install the plugin (includes all skills)
-/plugin install claude-skills@claude-skills
+/plugin install jr-agent-skills@jr-agent-skills
 ```
 
 ## Available Skills
@@ -38,7 +38,7 @@ Z.ai/ZhipuAI API integration for building applications with GLM models including
 ## Structure
 
 ```
-claude-skills/
+jr-agent-skills/
 ├── .claude-plugin/
 │   ├── marketplace.json    # Marketplace registration
 │   └── plugin.json         # Plugin metadata

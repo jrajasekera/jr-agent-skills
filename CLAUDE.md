@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A Claude Code plugin marketplace containing skills for API integrations, document processing, and database optimization. Distributed via the Claude Code plugin marketplace system — users install with `/plugin marketplace add jrajasekera/claude-skills`.
+A Claude Code plugin marketplace containing skills for API integrations, document processing, and database optimization. Distributed via the Claude Code plugin marketplace system — users install with `/plugin marketplace add jrajasekera/jr-agent-skills`.
 
 ## Distribution
 

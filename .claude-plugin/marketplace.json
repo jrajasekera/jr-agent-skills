@@ -1,5 +1,5 @@
 {
-  "name": "claude-skills",
+  "name": "jr-agent-skills",
   "description": "Claude Code skills for API integrations, document processing, and database optimization",
   "owner": {
     "name": "Jrajasekera"
@@ -10,7 +10,7 @@
   },
   "plugins": [
     {
-      "name": "claude-skills",
+      "name": "jr-agent-skills",
       "source": "./",
       "description": "Skills collection: article extraction, codex review, document conversion, SQLite optimization, and API integrations for OpenRouter, Venice.ai, and Z.ai",
       "version": "1.0.0",

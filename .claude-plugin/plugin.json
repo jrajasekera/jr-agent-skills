@@ -1,12 +1,12 @@
 {
-  "name": "claude-skills",
+  "name": "jr-agent-skills",
   "description": "Skills collection: article extraction, codex review, document conversion, SQLite optimization, and API integrations for OpenRouter, Venice.ai, and Z.ai",
   "version": "1.0.0",
   "author": {
     "name": "Jrajasekera"
   },
-  "homepage": "https://github.com/jrajasekera/claude-skills",
-  "repository": "https://github.com/jrajasekera/claude-skills",
+  "homepage": "https://github.com/jrajasekera/jr-agent-skills",
+  "repository": "https://github.com/jrajasekera/jr-agent-skills",
   "license": "MIT",
   "keywords": [
     "skills",

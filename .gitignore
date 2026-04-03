@@ -20,6 +20,9 @@ Temporary Items
 # AI agents
 AGENTS.md
 
+# Git worktrees
+.worktrees/
+
 # Editor directories and files
 .vscode/
 .idea/

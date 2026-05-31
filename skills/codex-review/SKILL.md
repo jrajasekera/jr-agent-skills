@@ -1,211 +1,188 @@
 ---
 name: codex-review
-description: Use after creating design docs or implementation plans to get cross-agent review from Codex. Auto-triggers for non-trivial plans; asks first for simple changes. Captures feedback, addresses critical issues, presents minor concerns for user decision.
+description: Review non-trivial design docs or implementation plans with Codex before coding; validate feedback; fix critical plan issues; ask about non-critical choices. Also triggers when the user says "use codex-review", "ask Codex", or "get Codex feedback".
+when_to_use: Use after creating or updating a design doc, implementation plan, architecture/refactor/migration/rollout plan, or when the user says "use codex-review", "ask Codex", or "get Codex feedback". Auto-run for non-trivial plans; ask first for trivial single-file or docs-only changes. Do not use if the user says to skip review.
 ---
 
 # Codex Review
 
-## Overview
+## Principle
 
-Cross-agent review workflow: After creating a design doc or implementation plan, invoke Codex to review it, then address the feedback before implementation.
+Use Codex as an independent reviewer, not as an authority. Claude owns the plan, verifies every finding against the repository and user requirements, then decides what to change.
 
-**Core principle:** Two agents catch more issues than one. Codex reviews with fresh eyes while Claude addresses feedback.
+## Trigger Rules
 
-## When to Use
+Run automatically after drafting or materially changing a plan for:
 
-```dot
-digraph trigger_decision {
-    "Plan/design doc created" [shape=box];
-    "Is change trivial?" [shape=diamond];
-    "Ask user: use codex-review?" [shape=box];
-    "Auto-trigger codex-review" [shape=box];
-    "User says yes?" [shape=diamond];
-    "Skip review" [shape=box];
-    "Run review" [shape=box];
+- Multi-file implementation work.
+- New features, refactors, migrations, rollouts, or architecture decisions.
+- Security, auth, permissions, payments, billing, schemas, data handling, concurrency, performance-sensitive code, or dependency changes.
+- Any task where a flawed plan could waste significant implementation time.
 
-    "Plan/design doc created" -> "Is change trivial?";
-    "Is change trivial?" -> "Ask user: use codex-review?" [label="yes"];
-    "Is change trivial?" -> "Auto-trigger codex-review" [label="no"];
-    "Ask user: use codex-review?" -> "User says yes?" ;
-    "User says yes?" -> "Run review" [label="yes"];
-    "User says yes?" -> "Skip review" [label="no"];
-    "Auto-trigger codex-review" -> "Run review";
-}
-```
+Ask before running for trivial work:
 
-**Trivial changes:** Single-file edits, typo fixes, config changes, adding a simple function. Ask before reviewing.
+- Typos, small copy edits, simple config changes, docs-only edits, or a tiny single-file helper with no API/data-flow impact.
 
-**Non-trivial (auto-trigger):** Multi-file changes, new features, architectural decisions, refactors, anything with design choices.
+Never run if the user says to skip Codex review or proceed without additional review.
 
-**Also use when:** User explicitly requests codex-review (e.g., "use codex-review", "get Codex feedback").
+## Before Invoking Codex
 
-## Invoking Codex
+1. Ensure the plan exists as a file. If it only exists in chat, write or update the plan file first.
+2. Ensure the plan has concrete repository details: file paths, modules, functions, commands, tests, migration steps, constraints, and non-goals.
+3. Determine:
+   - `PROJECT_ROOT`: absolute path to the repository or project root.
+   - `PLAN_PATH`: relative path from `PROJECT_ROOT`, unless the plan is outside the project; then use an absolute path.
+4. Remove secrets, tokens, credentials, private keys, and unrelated user data from the prompt.
+5. If the plan is vague, improve it before asking Codex to review it.
 
-Run from the **project root directory**:
+## Where Codex Review Is Most (and Least) Useful
 
-**CRITICAL: You MUST set the Bash tool `timeout` parameter to `600000` (10 minutes) to prevent hangs. Run in foreground only — never background.**
+Codex is strongest at checking a plan against concrete code: whether file paths, frameworks, APIs, and patterns actually exist; missing or incompatible dependencies; architectural mismatches; and references to non-existent routes, models, or functions.
+
+Codex adds little value — and may return shallow feedback — when the plan references external systems it cannot access (third-party APIs, databases, services), is highly abstract with few concrete code references, or targets a greenfield project with no existing code to compare against. If feedback comes back shallow, add concrete file paths, symbols, or snippets to the plan and re-run rather than trusting a thin review.
+
+## Invoke Codex
+
+Use the Bash tool with these settings:
+
+- `timeout: 600000`
+- Foreground only: no `&`, `nohup`, `disown`, background subshells, or background task runners.
+- Capture stdout directly; do not write Codex feedback to a file.
+- Suppress stderr progress noise unless debugging a failure.
+
+Run this from any directory; `-C` sets the Codex workspace root. `--sandbox read-only` keeps Codex read-only, so no approval flag is needed in `exec` mode. (If you ever need one, `-a`/`--ask-for-approval` is a top-level flag that must precede the `exec` subcommand: `codex -a never exec …`.)
 
 ```bash
-codex exec -C /absolute/path/to/project/root \
-    --sandbox read-only \
-    --full-auto \
-    --skip-git-repo-check \
-    "Read relative/path/to/plan.md, do research on the codebase, and then provide feedback on the plan. Point out any issues, flaws, or concerns with the plan. In your final response, provide only the feedback. Don't offer to do anything else or ask follow-up questions." 2>/dev/null
+PROJECT_ROOT="/absolute/path/to/project/root"
+PLAN_PATH="relative/path/to/plan.md"
+
+cat <<CODEX_REVIEW_PROMPT | codex exec -C "$PROJECT_ROOT" \
+  --sandbox read-only \
+  --skip-git-repo-check \
+  --ephemeral \
+  - 2>/dev/null
+You are reviewing an implementation plan for correctness, feasibility, and fit with the existing codebase.
+
+Plan path: $PLAN_PATH
+Project root: $PROJECT_ROOT
+
+Review tasks:
+1. Read the plan.
+2. Inspect the repository as needed.
+3. Verify that the plan matches actual files, frameworks, APIs, naming, tests, and project conventions.
+4. Find missing steps, incorrect assumptions, security risks, migration risks, rollout risks, test gaps, and references to non-existent code.
+5. Do not modify files.
+6. Do not ask follow-up questions.
+7. Output only the final review in the format below.
+
+Format:
+## Critical
+- [C1] Title — Issue, impact, evidence from the repo, and concrete fix. Use file paths or symbols when possible.
+
+## Important
+- [I1] Title — Issue, impact, evidence, and suggested fix.
+
+## Optional
+- [O1] Title — Improvement, tradeoff, and when it is worth doing.
+
+## Looks Good
+- Note sound parts of the plan. If there are no concerns, write: "No concerns found."
+CODEX_REVIEW_PROMPT
 ```
 
-**Parameters:**
-- **Bash tool timeout**: Set `timeout: 600000` on the Bash tool call to kill the process after 10 minutes if it hangs. This replaces the old `timeout`/`gtimeout` shell wrapper which had zsh compatibility issues.
-- `-C`: Absolute path to project root
-- `--sandbox read-only`: Codex can read but not modify
-- `--full-auto`: No interactive prompts
-- `--skip-git-repo-check`: Works in any directory
-- `2>/dev/null`: Suppress stderr noise
+## Validate Feedback
 
-**Capture stdout directly** - do not write feedback to a file.
+For each Codex item, verify before acting:
 
-**CRITICAL: Run in foreground only.** Do NOT run codex exec as a background process (no `&`, no `nohup`, no subshell backgrounding). Always run it synchronously so that the command fully completes and exits before you proceed. Running it in the background can cause the process to linger and produce confusing duplicate output later when it eventually exits.
+- Does the referenced file, symbol, route, command, test, schema, or dependency actually exist?
+- Does the concern follow from the codebase and the plan?
+- Does it conflict with explicit user requirements?
+- Is it critical, important, optional, invalid, or out of scope?
 
-**Path handling:**
-- **Plan inside project:** Use relative path from project root (e.g., `docs/plan.md`)
-- **Plan outside project:** Use absolute path (e.g., `/tmp/scratch/plan.md`)
-- The `-C` flag always takes the absolute project root path regardless of where the plan file lives
+Ignore hallucinated or out-of-scope feedback. Do not change the plan just because Codex suggested it.
 
-## What Codex Reviews Well (and Doesn't)
+## Triage and Action
 
-**Codex excels at:**
-- Checking if plan matches actual codebase structure (file paths, frameworks, patterns)
-- Identifying missing dependencies or incompatible libraries
-- Spotting architectural mismatches (e.g., Express patterns in a Next.js app)
-- Finding references to non-existent code (routes, models, functions)
+| Bucket | Meaning | Action |
+|---|---|---|
+| Critical | Likely implementation failure, broken tests, data loss, security/privacy risk, migration failure, wrong architecture, or user-requirement violation. | Fix the plan immediately. |
+| Important | Valid improvement to correctness, maintainability, rollout safety, or test coverage, but not clearly blocking. | Apply if obvious and low-risk; otherwise ask. |
+| Optional | Style, polish, alternative approach, extra hardening, or nice-to-have. | Ask or leave as a recommendation. |
+| Invalid / out of scope | Hallucinated, already handled, irrelevant, or contrary to requirements. | Ignore; mention briefly only if useful. |
 
-**Codex may struggle with:**
-- Plans referencing external systems Codex can't access (APIs, databases, third-party services)
-- Very high-level or abstract plans with few concrete file/code references
-- Plans for greenfield projects where there's no existing code to compare against
+When applying feedback, edit the original plan/design doc. Do not create a separate feedback file.
 
-**If Codex feedback seems shallow:** The plan may lack enough concrete details for meaningful review. Consider adding specific file paths, function names, or code snippets before re-running.
+## Asking About Non-Critical Choices
 
-## Processing Feedback
+Prefer one grouped question for non-critical choices:
 
-After receiving Codex's feedback, categorize each item:
+```text
+Codex raised these non-critical options. Which should I apply?
 
-| Category | Action |
-|----------|--------|
-| **Critical issues** | Address immediately without asking. These are bugs, security issues, logical flaws, missing error handling, or architectural problems that would cause failures. |
-| **Minor concerns** | Present to user and ask which to address. These are style suggestions, optional improvements, alternative approaches, or "nice to have" items. |
-
-**Presenting minor concerns:**
-
-Handle each minor concern individually using `AskUserQuestion`. For each concern, present multiple ways to address it so the user can pick the best approach.
-
-Call `AskUserQuestion` once per minor concern with options representing different ways to resolve it:
-
-```
-AskUserQuestion:
-  question: "Codex suggests: [concern summary]. How should I address this?"
-  header: "[short label]"
-  options:
-    - label: "[Approach A]", description: "[what this approach does]"
-    - label: "[Approach B]", description: "[what this approach does]"
-    - label: "Skip this", description: "Don't address this concern"
-  multiSelect: false
+1. [Short label] — [concrete change and tradeoff]
+2. [Short label] — [concrete change and tradeoff]
+3. Skip non-critical changes — Continue with critical fixes only.
 ```
 
-**Guidelines:**
-- Each concern gets its own `AskUserQuestion` call — do not batch multiple concerns into one question
-- Always include a "Skip this" option so the user can dismiss concerns they don't care about
-- Present 2-3 concrete resolution approaches per concern, plus the skip option
-- If there are many minor concerns (5+), you may batch multiple `AskUserQuestion` calls in parallel (up to 4 per message) to avoid excessive back-and-forth
+Use `AskUserQuestion` if available; otherwise ask in chat. Use separate questions only for independent, high-impact choices. Always include a skip option.
 
 ## Review Rounds
 
-**Auto-continue on critical issues, capped at 3 rounds.**
+Default flow:
 
-```dot
-digraph review_rounds {
-    "Round N" [shape=box];
-    "Process feedback" [shape=box];
-    "Had critical issues?" [shape=diamond];
-    "N < 3?" [shape=diamond];
-    "Update plan, run round N+1" [shape=box];
-    "Proceed to implementation" [shape=box];
+1. Run round 1.
+2. Validate and triage feedback.
+3. Fix valid critical issues in the plan.
+4. Ask about non-critical choices if needed.
+5. Re-run only if valid critical issues were fixed.
+6. Stop when a round has no valid critical issues, or after 3 total rounds.
 
-    "Round N" -> "Process feedback";
-    "Process feedback" -> "Had critical issues?";
-    "Had critical issues?" -> "Proceed to implementation" [label="no"];
-    "Had critical issues?" -> "N < 3?" [label="yes"];
-    "N < 3?" -> "Update plan, run round N+1" [label="yes"];
-    "N < 3?" -> "Proceed to implementation" [label="no (max reached)"];
-    "Update plan, run round N+1" -> "Round N" [style=dashed];
-}
+Rules:
+
+- Maximum 3 rounds total.
+- If the user requests a specific number of rounds, respect it but cap at 3.
+- Do not re-run for optional or stylistic feedback only.
+- If round 3 still has valid critical issues, stop and summarize the remaining risk.
+- Respect the task boundary: if the user asked for review only, do not proceed to implementation.
+
+## Failure Handling
+
+If `codex exec` fails, times out, returns no usable stdout, or the CLI is unavailable:
+
+1. Retry once with the same foreground command and Bash timeout.
+2. If the prompt may be too large, retry once with a shorter prompt that still includes the plan path and structured output request.
+3. If it still fails, ask:
+
+```text
+Codex review failed after one retry. How would you like to proceed?
+
+1. Skip Codex review and continue with my own review.
+2. Try Codex again.
+3. Stop here so you can inspect the Codex setup locally.
 ```
 
-**Rules:**
-- After each round, if any **critical issues** were found and addressed, automatically run another round to verify the fixes
-- If a round produces only minor concerns (or no feedback), stop — no further rounds needed
-- **Maximum 3 rounds total.** If round 3 still has critical issues, proceed to implementation anyway and note the unresolved concerns
-- The user can still request a specific number of rounds (e.g., "do 2 rounds"), which overrides the auto-continue logic but is still capped at 3
+Do not claim Codex reviewed the plan if the command failed or returned unusable output.
 
-After each round:
-1. Address critical issues and update the plan/design doc
-2. Present minor concerns to the user (per the feedback processing rules above)
-3. If critical issues were addressed and rounds remain, invoke Codex again on the updated doc
-4. After final round, proceed to implementation
+## Report Back
 
-## Error Handling
+After the final review round, summarize:
 
-```dot
-digraph error_handling {
-    "Run codex exec" [shape=box];
-    "Success?" [shape=diamond];
-    "Process feedback" [shape=box];
-    "Retry once" [shape=box];
-    "Success on retry?" [shape=diamond];
-    "Ask user how to proceed" [shape=box];
+- Rounds run.
+- Critical issues found and plan changes made.
+- Non-critical items applied, skipped, or awaiting decision.
+- Invalid Codex feedback ignored, if relevant.
+- Whether the plan is ready for implementation or still risky.
 
-    "Run codex exec" -> "Success?";
-    "Success?" -> "Process feedback" [label="yes"];
-    "Success?" -> "Retry once" [label="no (timeout/error)"];
-    "Retry once" -> "Success on retry?";
-    "Success on retry?" -> "Process feedback" [label="yes"];
-    "Success on retry?" -> "Ask user how to proceed" [label="no"];
-}
-```
+Do not paste long raw Codex output unless the user asks for it.
 
-**Note:** Bash tool timeout errors may surface as a tool-level timeout message rather than exit code 124 (which shell `timeout`/`gtimeout` would return). The retry logic still applies either way.
+## Pitfalls
 
-**On persistent failure, ask:**
-```
-Codex review failed after retry. How would you like to proceed?
-1. Skip review and continue to implementation
-2. Try again
-3. I'll review the plan manually
-```
-
-## Common Mistakes
-
-| Mistake | Fix |
-|---------|-----|
-| Forgetting to set Bash tool timeout | Always set `timeout: 600000` on the Bash tool call to prevent codex from hanging indefinitely |
-| Running codex from wrong directory | Always use `-C /absolute/path/to/project/root` |
-| Running codex in background | Always run synchronously (no `&`). Background processes cause duplicate output later |
-| Writing feedback to file | Capture stdout directly, don't create feedback files |
-| Running extra rounds when only minor concerns remain | Only auto-continue if critical issues were found |
-| Exceeding 3 rounds | Cap at 3 rounds max, even if critical issues persist |
-| Addressing all feedback equally | Categorize: critical = auto-fix, minor = ask user |
-| Forgetting to update plan between rounds | Always update the doc before next round |
-| Using relative path for plan outside project | Use absolute path for files not in project root |
-| Running review on vague/abstract plans | Ensure plan has concrete file paths and code references |
-
-## Quick Reference
-
-```
-# Review flow (auto-continues on critical issues, max 3 rounds)
-[Create plan] → codex-review round 1 → address feedback →
-  critical issues found? → yes → update plan → round 2 → ...
-  no critical issues?    → proceed to implementation
-
-# Feedback handling
-Critical issues  → Address immediately, triggers another round
-Minor concerns   → AskUserQuestion per concern with resolution options
-```
+- Do not run Codex before saving the plan.
+- Do not omit the Bash tool `timeout: 600000`.
+- Do not use shell `timeout`/`gtimeout` wrappers instead of the Bash tool timeout.
+- Do not use `--full-auto` (removed from `codex exec`); rely on `--sandbox read-only`, which needs no approval flag.
+- Do not pass `--ask-for-approval`/`-a` to `codex exec` — it is a top-level flag and errors as an "unexpected argument" if placed after `exec`.
+- Do not background the process.
+- Do not let Codex modify files.
+- Do not auto-apply optional preferences.
+- Do not exceed 3 rounds.

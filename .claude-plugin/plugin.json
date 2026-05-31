@@ -1,7 +1,7 @@
 {
   "name": "jr-agent-skills",
   "description": "Skills collection: article extraction, codex review, document conversion, SQLite optimization, and API integrations for OpenRouter, Venice.ai, and Z.ai",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "author": {
     "name": "Jrajasekera"
   },

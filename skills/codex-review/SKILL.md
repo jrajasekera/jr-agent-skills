@@ -31,7 +31,7 @@ Never run if the user says to skip Codex review or proceed without additional re
 2. Ensure the plan has concrete repository details: file paths, modules, functions, commands, tests, migration steps, constraints, and non-goals.
 3. Determine:
    - `PROJECT_ROOT`: absolute path to the repository or project root.
-   - `PLAN_PATH`: relative path from `PROJECT_ROOT`, unless the plan is outside the project; then use an absolute path.
+   - `PLAN_PATH`: absolute path to the plan file. Its contents are inlined into the prompt (see below), so an absolute path keeps `cat` working regardless of the current directory.
 4. Remove secrets, tokens, credentials, private keys, and unrelated user data from the prompt.
 5. If the plan is vague, improve it before asking Codex to review it.
 
@@ -45,16 +45,18 @@ Codex adds little value — and may return shallow feedback — when the plan re
 
 Use the Bash tool with these settings:
 
-- `timeout: 600000`
+- `timeout: 1200000`
 - Foreground only: no `&`, `nohup`, `disown`, background subshells, or background task runners.
 - Capture stdout directly; do not write Codex feedback to a file.
 - Suppress stderr progress noise unless debugging a failure.
 
 Run this from any directory; `-C` sets the Codex workspace root. `--sandbox read-only` keeps Codex read-only, so no approval flag is needed in `exec` mode. (If you ever need one, `-a`/`--ask-for-approval` is a top-level flag that must precede the `exec` subcommand: `codex -a never exec …`.)
 
+Inline the plan's contents into the prompt via `$(cat "$PLAN_PATH")` — never ask Codex to open the plan by path itself, since it may silently read the wrong file and review the wrong content.
+
 ```bash
 PROJECT_ROOT="/absolute/path/to/project/root"
-PLAN_PATH="relative/path/to/plan.md"
+PLAN_PATH="/absolute/path/to/plan.md"
 
 cat <<CODEX_REVIEW_PROMPT | codex exec -C "$PROJECT_ROOT" \
   --sandbox read-only \
@@ -63,11 +65,10 @@ cat <<CODEX_REVIEW_PROMPT | codex exec -C "$PROJECT_ROOT" \
   - 2>/dev/null
 You are reviewing an implementation plan for correctness, feasibility, and fit with the existing codebase.
 
-Plan path: $PLAN_PATH
 Project root: $PROJECT_ROOT
 
 Review tasks:
-1. Read the plan.
+1. Read the plan provided at the end of this prompt (between the PLAN START / PLAN END markers).
 2. Inspect the repository as needed.
 3. Verify that the plan matches actual files, frameworks, APIs, naming, tests, and project conventions.
 4. Find missing steps, incorrect assumptions, security risks, migration risks, rollout risks, test gaps, and references to non-existent code.
@@ -87,6 +88,10 @@ Format:
 
 ## Looks Good
 - Note sound parts of the plan. If there are no concerns, write: "No concerns found."
+
+--- PLAN START ---
+$(cat "$PLAN_PATH")
+--- PLAN END ---
 CODEX_REVIEW_PROMPT
 ```
 
@@ -178,8 +183,9 @@ Do not paste long raw Codex output unless the user asks for it.
 ## Pitfalls
 
 - Do not run Codex before saving the plan.
-- Do not omit the Bash tool `timeout: 600000`.
+- Do not omit the Bash tool `timeout: 1200000`.
 - Do not use shell `timeout`/`gtimeout` wrappers instead of the Bash tool timeout.
+- Do not ask Codex to read the plan by path; inline it via `$(cat "$PLAN_PATH")` so Codex reviews exactly the intended content.
 - Do not use `--full-auto` (removed from `codex exec`); rely on `--sandbox read-only`, which needs no approval flag.
 - Do not pass `--ask-for-approval`/`-a` to `codex exec` — it is a top-level flag and errors as an "unexpected argument" if placed after `exec`.
 - Do not background the process.

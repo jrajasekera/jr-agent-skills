@@ -1,340 +1,434 @@
-# Image API Reference
+# Image generation, editing, upscaling, and background removal
 
-## Generate Images
-`POST https://api.venice.ai/api/v1/image/generate`
+Venice exposes both a native image-generation endpoint and an OpenAI-compatible endpoint, plus separate native endpoints for editing, multi-image composition, enhancement/upscaling, and background removal.
 
-### Request Parameters
+## Endpoint map
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `model` | string | required | Model ID (e.g., `venice-sd35`, `qwen-image`) |
-| `prompt` | string | required | Image description (1-7500 chars, model-specific) |
-| `negative_prompt` | string | - | What to avoid (max 7500 chars). Less effective on newer models like Flux |
-| `width` | integer | 1024 | Image width (max 1280) |
-| `height` | integer | 1024 | Image height (max 1280) |
-| `format` | string | "webp" | "jpeg", "png", "webp" |
-| `cfg_scale` | number | - | Prompt adherence (0-20, typically 7.0-15.0) |
-| `steps` | integer | 0 | Inference steps (model-specific) |
-| `seed` | integer | random | Reproducibility seed (-999999999 to 999999999) |
-| `variants` | integer | 1 | Number of images (1-4, requires return_binary=false) |
-| `style_preset` | string | - | Apply image style (see Style Presets below) |
-| `aspect_ratio` | string | - | "1:1", "16:9", etc. (some models) |
-| `resolution` | string | - | "1K", "2K", "4K" (some models like nano-banana-pro) |
-| `lora_strength` | integer | - | LoRA strength (0-100) |
-| `safe_mode` | boolean | true | Blur adult content. Set false for uncensored generation |
-| `hide_watermark` | boolean | false | Remove Venice watermark |
-| `embed_exif_metadata` | boolean | false | Include prompt in EXIF |
-| `return_binary` | boolean | false | Return raw binary instead of base64 JSON |
-| `enable_web_search` | boolean | false | Use web for reference (some models) |
+| Endpoint | Purpose | Response |
+|---|---|---|
+| `POST /image/generate` | Native text-to-image with seeds, variants, negative prompts, styles, and references | JSON base64 array or binary image |
+| `POST /images/generations` | OpenAI-compatible text-to-image | OpenAI image response |
+| `GET /image/styles` | Current style preset names | JSON |
+| `POST /image/edit` | Prompt-driven single-image edit | Binary PNG/image |
+| `POST /image/multi-edit` | Compose/edit one to three images | Binary PNG/image |
+| `POST /image/upscale` | Scale and/or enhance an image | Binary PNG/image |
+| `POST /image/background-remove` | Transparent foreground cutout | Binary PNG |
 
-### Response (JSON, when return_binary=false)
-```json
-{
-  "id": "generate-image-...",
-  "images": ["<base64-encoded-image>"],
-  "timing": {
-    "total": 5000,
-    "inferenceDuration": 4500,
-    "inferenceQueueTime": 300,
-    "inferencePreprocessingTime": 200
-  }
-}
+Before calling any endpoint, query:
+
+```bash
+curl -sS "https://api.venice.ai/api/v1/models?type=image" \
+  -H "Authorization: Bearer $VENICE_API_KEY"
+
+curl -sS "https://api.venice.ai/api/v1/models?type=inpaint" \
+  -H "Authorization: Bearer $VENICE_API_KEY"
+
+curl -sS "https://api.venice.ai/api/v1/models?type=upscale" \
+  -H "Authorization: Bearer $VENICE_API_KEY"
 ```
 
-### Complete Generation Example (Python)
+Do not copy a model ID from this guide into long-lived production configuration. Resolve current models, constraints, and prices.
+
+## Native generation: `/image/generate`
+
+```bash
+curl -sS https://api.venice.ai/api/v1/image/generate \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "default",
+    "prompt": "A modern glass observatory on a snowy ridge at blue hour",
+    "width": 1024,
+    "height": 1024,
+    "format": "webp",
+    "variants": 1,
+    "safe_mode": true,
+    "return_binary": false
+  }' > response.json
+```
+
+### Common fields
+
+| Field | Notes |
+|---|---|
+| `model` | Required model ID or supported trait. Verify via `type=image`. |
+| `prompt` | Required. Honor `model_spec.constraints.promptCharacterLimit`. |
+| `negative_prompt` | Optional; effectiveness varies by model family. |
+| `width`, `height` | Use only for dimension-driven models. Honor max values and `widthHeightDivisor`. |
+| `aspect_ratio` | Use for ratio-driven models. Validate against `aspectRatios[]`. |
+| `resolution` | Commonly `1K`, `2K`, or `4K` on supporting models. Validate. |
+| `cfg_scale` | Prompt-adherence control; model-specific and often ignored by newer provider APIs. |
+| `steps` | Inference-step control; turbo/provider models can ignore it. |
+| `seed` | Reproducibility hint within the same model/configuration. |
+| `variants` | Multiple outputs, commonly 1–4. Requires JSON/base64 mode. |
+| `style_preset` | Name returned by `GET /image/styles`. |
+| `style_references` | Existing images that guide output aesthetics on supporting models. |
+| `lora_strength` | Model-specific; do not send unless advertised. |
+| `format` | Commonly `webp`, `png`, or `jpeg`. |
+| `return_binary` | `false`: JSON base64; `true`: direct image bytes. |
+| `embed_exif_metadata` | Embed generation metadata where supported. |
+| `hide_watermark` | Advisory; policy may still require a watermark. |
+| `safe_mode` | Controls safety blurring/filtering on supported image routes. |
+| `enable_web_search` | Only on models that advertise it; extra cost can apply. |
+
+### Sizing rules
+
+Inspect the selected model's `constraints` before building the body.
+
 ```python
-import requests
+spec = selected_model["model_spec"]
+constraints = spec.get("constraints", {})
+
+prompt_limit = constraints.get("promptCharacterLimit")
+divisor = constraints.get("widthHeightDivisor")
+aspect_ratios = constraints.get("aspectRatios")
+resolutions = constraints.get("resolutions")
+```
+
+Use exactly one supported sizing strategy:
+
+```json
+{"width": 1024, "height": 1024}
+```
+
+or:
+
+```json
+{"aspect_ratio": "16:9", "resolution": "2K"}
+```
+
+Do not assume arbitrary dimensions are accepted. If a divisor is present, both dimensions must be divisible by it.
+
+### Decode JSON/base64 output
+
+```python
 import base64
 import os
+import requests
 
+BASE = "https://api.venice.ai/api/v1"
 headers = {
-    "Authorization": f"Bearer {os.getenv('VENICE_API_KEY')}",
-    "Content-Type": "application/json"
+    "Authorization": f"Bearer {os.environ['VENICE_API_KEY']}",
+    "Content-Type": "application/json",
 }
 
-response = requests.post(
-    "https://api.venice.ai/api/v1/image/generate",
+res = requests.post(
+    f"{BASE}/image/generate",
     headers=headers,
     json={
-        "model": "venice-sd35",
-        "prompt": "A cyberpunk city with neon lights and rain",
-        "negative_prompt": "blur, low quality, distorted",
+        "model": "default",
+        "prompt": "A minimal architectural model photographed in a studio",
         "width": 1024,
         "height": 1024,
         "format": "webp",
-        "cfg_scale": 7.5,
-        "steps": 30,
-        "seed": 42,
-        "style_preset": "Cinematic",
-        "safe_mode": True,
-        "variants": 1
-    }
+        "return_binary": False,
+    },
+    timeout=180,
 )
+res.raise_for_status()
 
-result = response.json()
-image_data = base64.b64decode(result["images"][0])
-with open("output.webp", "wb") as f:
-    f.write(image_data)
+payload = res.json()
+for index, encoded in enumerate(payload["images"]):
+    with open(f"image-{index}.webp", "wb") as output:
+        output.write(base64.b64decode(encoded))
 ```
 
-### Complete Generation Example (JavaScript)
-```javascript
-const response = await fetch('https://api.venice.ai/api/v1/image/generate', {
-    method: 'POST',
-    headers: {
-        'Authorization': `Bearer ${process.env.VENICE_API_KEY}`,
-        'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-        model: 'venice-sd35',
-        prompt: 'A cyberpunk city with neon lights and rain',
-        negative_prompt: 'blur, low quality, distorted',
-        width: 1024,
-        height: 1024,
-        format: 'webp'
-    })
-});
+### Stream binary output
 
-const result = await response.json();
-const imageBuffer = Buffer.from(result.images[0], 'base64');
-fs.writeFileSync('output.webp', imageBuffer);
-```
-
-### Response Headers
-- `x-venice-is-blurred`: Image was blurred (safe mode triggered)
-- `x-venice-is-content-violation`: Content policy violation
-- `x-venice-model-deprecation-warning`: Deprecation notice
-
-## Upscale Images
-`POST https://api.venice.ai/api/v1/image/upscale`
-
-Enhance image resolution 2x or 4x.
-
-### Request Parameters
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `image` | string | Yes | Base64-encoded input image |
-| `scale` | integer | Yes | Upscale factor: 2 or 4 |
-
-### Pricing
-- 2x upscale: $0.02
-- 4x upscale: $0.08
-
-### Python Example
 ```python
-import base64
-import requests
-
-# Load source image
-with open("photo.jpg", "rb") as f:
-    image_base64 = base64.b64encode(f.read()).decode("utf-8")
-
-# Upscale 4x
-response = requests.post(
-    "https://api.venice.ai/api/v1/image/upscale",
-    headers={
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    },
-    json={
-        "image": image_base64,
-        "scale": 4
-    }
-)
-
-# Response is raw image binary
-with open("upscaled.png", "wb") as f:
-    f.write(response.content)
-print(f"Upscaled: {len(response.content)} bytes")
-```
-
-### JavaScript Example
-```javascript
-import fs from 'fs';
-
-const imageBase64 = fs.readFileSync('photo.jpg').toString('base64');
-
-const response = await fetch('https://api.venice.ai/api/v1/image/upscale', {
-    method: 'POST',
-    headers: {
-        'Authorization': `Bearer ${process.env.VENICE_API_KEY}`,
-        'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-        image: imageBase64,
-        scale: 4
-    })
-});
-
-const buffer = Buffer.from(await response.arrayBuffer());
-fs.writeFileSync('upscaled.png', buffer);
-```
-
-## Edit Images (Inpainting)
-`POST https://api.venice.ai/api/v1/image/edit`
-
-Uses Qwen-Image model for AI-powered editing/inpainting. The model analyzes the image and text instruction to alter specific regions while preserving overall composition.
-
-### Request Parameters
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `prompt` | string | Yes | Edit instruction (e.g., "Colorize", "Change sky to sunset", "Add a hat") |
-| `image` | string | Yes | Base64-encoded input image, or URL starting with http/https |
-
-### Pricing
-~$0.04 per edit
-
-### Response
-Returns raw image binary data.
-
-### Python Example
-```python
-import base64
-import requests
-
-# Load source image
-with open("photo.jpg", "rb") as f:
-    image_base64 = base64.b64encode(f.read()).decode("utf-8")
-
-# Edit the image
-response = requests.post(
-    "https://api.venice.ai/api/v1/image/edit",
-    headers={
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    },
-    json={
-        "prompt": "Change the sky to a dramatic sunset with orange and purple clouds",
-        "image": image_base64
-    }
-)
-
-with open("edited.png", "wb") as f:
-    f.write(response.content)
-```
-
-### JavaScript Example
-```javascript
-import fs from 'fs';
-
-const imageBase64 = fs.readFileSync('photo.jpg').toString('base64');
-
-const response = await fetch('https://api.venice.ai/api/v1/image/edit', {
-    method: 'POST',
-    headers: {
-        'Authorization': `Bearer ${process.env.VENICE_API_KEY}`,
-        'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-        prompt: 'Make the background a cozy coffee shop',
-        image: imageBase64
-    })
-});
-
-const buffer = Buffer.from(await response.arrayBuffer());
-fs.writeFileSync('edited.png', buffer);
-```
-
-### Using a URL Instead of Base64
-```python
-response = requests.post(
-    "https://api.venice.ai/api/v1/image/edit",
+res = requests.post(
+    f"{BASE}/image/generate",
     headers=headers,
     json={
-        "prompt": "Colorize this black and white photo",
-        "image": "https://example.com/bw-photo.jpg"
-    }
+        "model": "default",
+        "prompt": "A dark blue abstract gradient with a subtle glow",
+        "return_binary": True,
+        "format": "png",
+    },
+    timeout=180,
 )
+res.raise_for_status()
+
+content_type = res.headers.get("Content-Type", "")
+if not content_type.startswith("image/"):
+    raise RuntimeError(f"Expected image, got {content_type}: {res.text[:500]}")
+
+with open("generated.png", "wb") as output:
+    output.write(res.content)
 ```
 
-### Generate → Edit → Upscale Pipeline
-```python
-import base64
-import requests
+`variants > 1` is incompatible with binary mode because one HTTP body cannot carry multiple independent image files.
 
-headers = {
-    "Authorization": f"Bearer {api_key}",
-    "Content-Type": "application/json"
+## Style presets
+
+```bash
+curl -sS https://api.venice.ai/api/v1/image/styles \
+  -H "Authorization: Bearer $VENICE_API_KEY"
+```
+
+Use the exact returned style name. Do not freeze the preset list in application code.
+
+## Style references
+
+On models with current style-reference support:
+
+```json
+{
+  "model": "<supporting-image-model>",
+  "prompt": "A lighthouse on a rocky coast at dusk",
+  "style_references": [
+    {
+      "image": "https://example.com/reference-1.png",
+      "strength": 0.8
+    },
+    {
+      "image": "data:image/png;base64,...",
+      "strength": 0.4
+    }
+  ]
 }
-
-# Step 1: Generate
-gen_resp = requests.post(
-    "https://api.venice.ai/api/v1/image/generate",
-    headers=headers,
-    json={
-        "model": "venice-sd35",
-        "prompt": "A medieval castle on a hilltop",
-        "width": 1024,
-        "height": 1024
-    }
-)
-generated_b64 = gen_resp.json()["images"][0]
-
-# Step 2: Edit
-edit_resp = requests.post(
-    "https://api.venice.ai/api/v1/image/edit",
-    headers=headers,
-    json={
-        "prompt": "Add a dragon flying above the castle",
-        "image": generated_b64
-    }
-)
-edited_b64 = base64.b64encode(edit_resp.content).decode("utf-8")
-
-# Step 3: Upscale
-upscale_resp = requests.post(
-    "https://api.venice.ai/api/v1/image/upscale",
-    headers=headers,
-    json={
-        "image": edited_b64,
-        "scale": 4
-    }
-)
-with open("final_4k.png", "wb") as f:
-    f.write(upscale_resp.content)
 ```
 
-## Image Models
+Check:
 
-| Model | Best For | Resolution | Pricing |
-|-------|----------|------------|---------|
-| `qwen-image` | Highest quality, editing | 1K, 2K, 4K | Variable |
-| `venice-sd35` | General purpose (default) | Standard | ~$0.01/image |
-| `hidream` | Fast generation | Standard | ~$0.01/image |
-| `flux-2-pro` | Professional quality | Standard | ~$0.04/image |
-| `flux-2-max` | High-quality output | Standard | ~$0.02/image |
-| `nano-banana-pro` | Photorealism, product shots | 1K, 2K, 4K | $0.18-$0.35 |
-| `z-image-turbo` | Fast, good quality | Standard | Variable |
+- style-reference capability flag;
+- `constraints.maxStyleReferences`;
+- whether per-reference strength is supported;
+- current file-size limit and accepted URL/base64 forms;
+- whether the model is private or anonymized before sending proprietary references.
 
-**Note:** Model availability changes. Query `GET /models?type=image` for current options.
+Describe the desired **subject/content** in the prompt; use references primarily for visual language. Do not assume they provide identity-perfect copying.
 
-## Style Presets
-Available styles (use with `style_preset`):
-- 3D Model
-- Analog Film
-- Anime
-- Cinematic
-- Comic Book
-- Digital Art
-- Enhance
-- Fantasy Art
-- Isometric
-- Line Art
-- Low Poly
-- Neon Punk
-- Origami
-- Photographic
-- Pixel Art
-- Tile Texture
+## OpenAI-compatible generation: `/images/generations`
 
-Query `/api/v1/image/styles` for the full up-to-date list.
+Use this for a low-friction OpenAI SDK migration. Use the native endpoint when you need variants, seeds, negative prompts, CFG, steps, presets, or style references.
 
-## Error Handling
-| Status | Meaning |
-|--------|---------|
-| 400 | Invalid parameters or image format |
-| 401 | Authentication failed |
-| 402 | Insufficient balance |
-| 429 | Rate limit exceeded (20 RPM for images) |
-| 500 | Inference/upscale failed |
-| 503 | Model at capacity |
+```python
+from openai import OpenAI
+import os
+
+client = OpenAI(
+    api_key=os.environ["VENICE_API_KEY"],
+    base_url="https://api.venice.ai/api/v1",
+)
+
+result = client.images.generate(
+    model="default",
+    prompt="A white ceramic lamp on a walnut desk, product photograph",
+    size="1024x1024",
+    response_format="b64_json",
+)
+
+image_b64 = result.data[0].b64_json
+```
+
+Common compatibility fields:
+
+- `model`
+- `prompt`
+- `size`
+- `response_format`
+- `output_format`
+- `moderation`
+- `n` (currently `1`)
+- `quality`
+- `style`
+- `background`
+- `user`
+
+Some OpenAI fields are accepted but ignored. Venice currently supports a single output on this compatibility route; use `/image/generate` for multiple variants. A `url` response can be a data URL rather than a durable hosted URL—persist the bytes yourself.
+
+## Single-image editing: `/image/edit`
+
+Resolve a current `type=inpaint` model first.
+
+```python
+import base64
+import os
+import requests
+
+with open("photo.jpg", "rb") as source:
+    image_b64 = base64.b64encode(source.read()).decode("ascii")
+
+res = requests.post(
+    "https://api.venice.ai/api/v1/image/edit",
+    headers={
+        "Authorization": f"Bearer {os.environ['VENICE_API_KEY']}",
+        "Content-Type": "application/json",
+    },
+    json={
+        "model": os.environ["VENICE_INPAINT_MODEL"],
+        "prompt": "Replace the overcast sky with a warm sunrise while preserving the buildings",
+        "image": image_b64,
+        "aspect_ratio": "16:9",
+        "safe_mode": True,
+    },
+    timeout=240,
+)
+res.raise_for_status()
+
+if not res.headers.get("Content-Type", "").startswith("image/"):
+    raise RuntimeError(res.text[:1000])
+
+with open("edited.png", "wb") as output:
+    output.write(res.content)
+```
+
+Key points:
+
+- `/image/edit` prefers the field name `model`.
+- `modelId` can exist as a deprecated compatibility alias on this route; do not generate new code with it unless the live schema requires it.
+- `image` can be base64 or, where documented, a public HTTPS URL.
+- Validate aspect ratio against the chosen inpaint model.
+- Response is binary, not base64 JSON.
+
+Write prompts as explicit edit instructions:
+
+```text
+Change only the jacket from black to dark green. Preserve the face, pose,
+lighting, background, crop, camera angle, and all other clothing.
+```
+
+Avoid vague prompts such as “make it better.”
+
+## Multi-image editing: `/image/multi-edit`
+
+This route has a deliberate field-name asymmetry: it uses **`modelId`**, not `model`, in the current schema.
+
+### JSON form
+
+```json
+{
+  "modelId": "<current-multi-edit-model>",
+  "prompt": "Place the person from image 2 naturally into the beach scene in image 1",
+  "images": [
+    "https://example.com/beach.jpg",
+    "data:image/png;base64,..."
+  ],
+  "safe_mode": true
+}
+```
+
+The first image is the base; later images are subjects, layers, or references. Current documented limit is one to three images, but validate the live model constraint.
+
+### Multipart form
+
+```bash
+curl -sS https://api.venice.ai/api/v1/image/multi-edit \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -F "modelId=$VENICE_INPAINT_MODEL" \
+  -F "prompt=Place the person from image 2 into image 1" \
+  -F "images=@base.jpg" \
+  -F "images=@subject.png" \
+  --output composite.png
+```
+
+Use multiple parts with the same `images` field name. Preserve order.
+
+## Upscale and enhancement: `/image/upscale`
+
+```python
+res = requests.post(
+    "https://api.venice.ai/api/v1/image/upscale",
+    headers={
+        "Authorization": f"Bearer {os.environ['VENICE_API_KEY']}",
+        "Content-Type": "application/json",
+    },
+    json={
+        "image": image_b64,
+        "scale": 2,
+        "enhance": True,
+        "enhanceCreativity": 0.35,
+        "enhancePrompt": "natural skin texture, fine fabric detail",
+        "replication": 0.55,
+    },
+    timeout=300,
+)
+res.raise_for_status()
+```
+
+Current controls include:
+
+| Field | Purpose |
+|---|---|
+| `scale` | Commonly 1–4. `1` is enhancement without enlargement and requires enhancement. |
+| `enhance` | Enable generative enhancement. |
+| `enhanceCreativity` | More reinterpretation at higher values. |
+| `enhancePrompt` | Short texture/style cue. |
+| `replication` | Preserve original line/noise/detail structure. |
+
+Large inputs can be clamped to the endpoint's output-pixel ceiling. Inspect returned dimensions rather than assuming the exact requested multiplier was possible.
+
+Use plain upscaling for fidelity. Use enhancement only when generative changes are acceptable.
+
+## Background removal: `/image/background-remove`
+
+Base64 form:
+
+```bash
+curl -sS https://api.venice.ai/api/v1/image/background-remove \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"image":"<base64>"}' \
+  --output cutout.png
+```
+
+URL form:
+
+```bash
+curl -sS https://api.venice.ai/api/v1/image/background-remove \
+  -H "Authorization: Bearer $VENICE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"image_url":"https://example.com/product.jpg"}' \
+  --output cutout.png
+```
+
+Send `image` **or** `image_url`, not both. Preserve PNG alpha when saving or transforming the result.
+
+## Shared input rules
+
+Image edit endpoints can enforce:
+
+- maximum encoded/upload size;
+- minimum and maximum pixel area;
+- public reachability for URLs;
+- supported image MIME types;
+- endpoint-specific base64 format (plain base64 versus data URL);
+- safe-mode policy.
+
+Do not blindly add a `data:image/...` prefix to every endpoint. Follow the current request schema. If a route expects plain base64 and returns `400`, strip the prefix.
+
+## Cost control
+
+1. Read `model_spec.pricing` for generation/edit models.
+2. Select the exact resolution tier before estimating.
+3. Multiply by `variants`.
+4. Include style-reference, web-search, upscale, or enhancement charges where advertised.
+5. Enforce an application-level maximum before submitting.
+6. Reconcile against billing usage rather than assuming the estimate equals final cost.
+
+## Error handling
+
+| Status | Likely cause |
+|---|---|
+| `400` | Invalid dimensions, ratio, prompt length, model, image, image count, or content-policy result |
+| `401` | Invalid credentials or gated model |
+| `402` | Insufficient account/wallet balance |
+| `413` | Platform payload limit, depending on route |
+| `415` | JSON versus multipart mismatch or invalid media type |
+| `422` | Endpoint/provider-specific validation or policy behavior |
+| `429` | Image endpoint/key limit |
+| `500` / `503` | Inference or capacity failure |
+
+For a binary route, an error response is JSON/text. Always check `response.ok` and `Content-Type` before writing bytes to an image file.
+
+## Sources of truth
+
+- Native generation: `https://docs.venice.ai/api-reference/endpoint/image/generate`
+- OpenAI generation: `https://docs.venice.ai/api-reference/endpoint/image/generations`
+- Styles: `https://docs.venice.ai/api-reference/endpoint/image/styles`
+- Edit: `https://docs.venice.ai/api-reference/endpoint/image/edit`
+- Multi-edit: `https://docs.venice.ai/api-reference/endpoint/image/multi-edit`
+- Upscale: `https://docs.venice.ai/api-reference/endpoint/image/upscale`
+- Background removal: `https://docs.venice.ai/api-reference/endpoint/image/background-remove`
+- Current image models: `https://docs.venice.ai/models/image`

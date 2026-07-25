@@ -30,7 +30,7 @@ Convert documents between common formats using Pandoc for consistent output and 
 Optimize SQLite database performance through configuration, schema design, indexing, and query tuning.
 
 ### [venice-ai-api](./skills/venice-ai-api/)
-Venice.ai API integration for privacy-first AI applications including chat, image generation, video, TTS, STT, and embeddings.
+Build, migrate, and debug Venice.ai API integrations — chat and Responses, live model discovery and routing, images, audio, video, embeddings, characters, key administration, billing, and wallet authentication.
 
 ### [z-ai-api](./skills/z-ai-api/)
 Z.ai/ZhipuAI API integration for building applications with GLM models including chat, vision, image/video generation, and audio transcription.

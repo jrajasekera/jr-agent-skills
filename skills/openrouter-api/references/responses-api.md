@@ -1,340 +1,368 @@
-# Responses API (Beta)
+# Responses API
 
-## Overview
+The OpenRouter Responses API is an OpenAI Responses-compatible API skin for typed input/output items, reasoning, tools, multimodal data, structured text, and OpenRouter server tools.
 
-The Responses API is an alternative stateless API format, compatible with OpenAI's Responses API. Each request is independent with no conversation persistence.
+> **Status:** Beta and stateless. Check the current OpenAPI and changelog before generating durable types or relying on a newly added event/field.
 
 ## Endpoint
 
-```
+```text
 POST https://openrouter.ai/api/v1/responses
 ```
 
-## Request Format
+## The stateless invariant
 
-```typescript
+OpenRouter does not provide durable server-side conversation state through this endpoint. Each request must contain the history and tool outputs needed to answer the next turn.
+
+A compatibility field such as `previous_response_id` may be accepted by the schema, but it must not be treated as proof that OpenRouter will retrieve and reconstruct prior turns. Build your application so the complete required context can be sent explicitly.
+
+## Minimal request
+
+```json
 {
-  // Input (required)
-  input: string | InputItem[],
-
-  // Model selection
-  model: string,
-  models?: string[],           // Fallback models
-
-  // Instructions
-  instructions?: string,       // System instructions
-
-  // Response control
-  max_output_tokens?: number,
-  temperature?: number,
-  top_p?: number,
-  top_k?: number,
-  presence_penalty?: number,
-  frequency_penalty?: number,
-
-  // Reasoning
-  reasoning?: {
-    effort: "xhigh" | "high" | "medium" | "low" | "minimal" | "none",
-    summary: "auto" | "concise" | "detailed",
-    max_tokens?: number,
-    enabled?: boolean
-  },
-
-  // Tools
-  tools?: Tool[],
-  tool_choice?: "auto" | "none" | "required" | { type: "function", name: string },
-  parallel_tool_calls?: boolean,
-
-  // Output format
-  text?: {
-    format: { type: "text" } | { type: "json_object" } | {
-      type: "json_schema",
-      name: string,
-      schema: object,
-      strict?: boolean
-    },
-    verbosity?: "high" | "medium" | "low"
-  },
-
-  // Streaming
-  stream?: boolean,
-
-  // OpenRouter-specific
-  provider?: ProviderPreferences,
-  plugins?: Plugin[],
-  user?: string,
-  session_id?: string,
-
-  // Image generation
-  modalities?: ("text" | "image")[],
-  image_config?: Record<string, string | number>
+  "model": "author/model-slug",
+  "instructions": "Answer accurately and concisely.",
+  "input": "Explain compare-and-swap."
 }
 ```
 
-## Input Format
+`input` may be a string or a list of typed items.
 
-### Simple String
+## Common request fields
 
-```typescript
-{
-  input: "Hello, how are you?"
-}
+| Field | Purpose |
+|---|---|
+| `model` | Primary model/router |
+| `models` | Fallbacks after `model`; without `model`, the complete priority order |
+| `input` | String or typed input items |
+| `instructions` | System-level instruction |
+| `max_output_tokens` | Output limit |
+| `stream` | SSE event stream |
+| `reasoning` | Unified reasoning controls |
+| `tools`, `tool_choice`, `parallel_tool_calls` | Function and server tools |
+| `max_tool_calls` | Bound server/tool activity where supported |
+| `text.format` | Text, JSON object, or JSON Schema output |
+| `text.verbosity` | Output verbosity where supported |
+| `modalities` | Requested output modalities, such as text/image |
+| `provider` | Provider routing preferences |
+| `plugins` | OpenRouter plugins |
+| `service_tier` | Requested upstream tier |
+| `session_id` | Sticky model/provider routing key |
+| `prompt_cache_key` / `cache_control` | Cache-related compatibility controls where supported |
+| `user` | Privacy-safe end-user identifier |
+| `metadata` | Small application metadata map within documented limits |
+| `trace` | Observability/tracing metadata |
+| `debug` | Streaming-only upstream request echo via `debug.echo_upstream_body`; development only |
+
+Inspect the current `ResponsesRequest` schema with:
+
+```bash
+python scripts/inspect_openapi.py --schema ResponsesRequest
 ```
 
-### Message Array
+## Typed input examples
 
-```typescript
+### Conversation messages
+
+```json
 {
-  input: [
+  "input": [
     {
-      type: "message",
-      role: "user",
-      content: "Hello!"
+      "type": "message",
+      "role": "user",
+      "content": "What is the capital of France?"
     },
     {
-      type: "message",
-      role: "assistant",
-      content: "Hi there!"
+      "type": "message",
+      "role": "assistant",
+      "phase": "final_answer",
+      "content": "Paris."
     },
     {
-      type: "message",
-      role: "user",
-      content: "What's the weather?"
+      "type": "message",
+      "role": "user",
+      "content": "Give me two historical facts about it."
     }
   ]
 }
 ```
 
-### With Content Types
+### Multimodal message
 
-```typescript
+```json
 {
-  input: [{
-    type: "message",
-    role: "user",
-    content: [
-      { type: "input_text", text: "What's in this image?" },
-      {
-        type: "input_image",
-        image_url: "https://...",
-        detail: "auto" | "high" | "low"
-      }
-    ]
-  }]
-}
-```
-
-### Including Previous Tool Calls
-
-```typescript
-{
-  input: [
-    { type: "message", role: "user", content: "What's the weather?" },
+  "input": [
     {
-      type: "function_call",
-      id: "call_123",
-      call_id: "call_123",
-      name: "get_weather",
-      arguments: '{"location": "NYC"}',
-      status: "completed"
-    },
-    {
-      type: "function_call_output",
-      call_id: "call_123",
-      output: '{"temp": 72, "conditions": "sunny"}'
+      "type": "message",
+      "role": "user",
+      "content": [
+        { "type": "input_text", "text": "What is shown here?" },
+        {
+          "type": "input_image",
+          "image_url": "https://example.com/image.png",
+          "detail": "auto"
+        }
+      ]
     }
   ]
 }
 ```
 
-## Response Format
+The exact content item types are additive. Use the current OpenAPI for audio, file, image, and other typed inputs. When replaying prior assistant messages, preserve any `phase` value (`commentary` or `final_answer`) returned by the model.
 
-```typescript
+## Function tool definition
+
+Responses uses the Responses-style function shape rather than nesting the schema under a Chat Completions `function` object:
+
+```json
 {
-  id: string,
-  object: "response",
-  created_at: number,
-  model: string,
-  status: "completed" | "incomplete" | "failed" | "cancelled",
-  completed_at: number | null,
-
-  output: OutputItem[],
-  output_text: string,           // Convenience: concatenated text output
-
-  error?: {
-    code: string,
-    message: string
-  },
-  incomplete_details?: {
-    reason: "max_output_tokens" | "content_filter"
-  },
-
-  usage: {
-    input_tokens: number,
-    output_tokens: number,
-    total_tokens: number,
-    input_tokens_details: { cached_tokens: number },
-    output_tokens_details: { reasoning_tokens: number },
-    cost?: number,
-    is_byok?: boolean
-  },
-
-  // Echo back request params
-  temperature: number | null,
-  top_p: number | null,
-  max_output_tokens: number | null,
-  tools: Tool[],
-  tool_choice: ToolChoice,
-  // ...
-}
-```
-
-## Output Items
-
-### Message Output
-
-```typescript
-{
-  type: "message",
-  id: string,
-  role: "assistant",
-  status: "completed" | "incomplete" | "in_progress",
-  content: [{
-    type: "output_text",
-    text: string,
-    annotations?: Annotation[],
-    logprobs?: LogProb[]
-  }]
-}
-```
-
-### Function Call Output
-
-```typescript
-{
-  type: "function_call",
-  id: string,
-  name: string,
-  arguments: string,
-  call_id: string,
-  status: "completed" | "incomplete" | "in_progress"
-}
-```
-
-### Reasoning Output
-
-```typescript
-{
-  type: "reasoning",
-  id: string,
-  summary: [{ type: "summary_text", text: string }],
-  content?: [{ type: "reasoning_text", text: string }],
-  encrypted_content?: string,
-  signature?: string,
-  status: "completed" | "incomplete" | "in_progress"
-}
-```
-
-### Web Search Output
-
-```typescript
-{
-  type: "web_search_call",
-  id: string,
-  status: "completed" | "searching" | "in_progress" | "failed"
-}
-```
-
-## Tool Definition
-
-```typescript
-{
-  tools: [
+  "tools": [
     {
-      type: "function",
-      name: "get_weather",
-      description: "Get current weather",
-      parameters: {
-        type: "object",
-        properties: {
-          location: { type: "string" }
+      "type": "function",
+      "name": "get_weather",
+      "description": "Get current weather for a location.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "location": { "type": "string" }
         },
-        required: ["location"]
+        "required": ["location"],
+        "additionalProperties": false
       },
-      strict: true
-    },
-    {
-      type: "web_search",  // Built-in web search tool
-      search_context_size: "low" | "medium" | "high",
-      user_location: {
-        type: "approximate",
-        city: "San Francisco",
-        country: "US"
-      }
+      "strict": true
     }
   ]
 }
 ```
 
-## Example Request
+## Returning a function result
 
-```typescript
-const response = await fetch("https://openrouter.ai/api/v1/responses", {
-  method: "POST",
-  headers: {
-    "Authorization": `Bearer ${API_KEY}`,
-    "Content-Type": "application/json"
-  },
-  body: JSON.stringify({
-    model: "anthropic/claude-sonnet-4.5",
-    input: [
-      { role: "user", content: "Calculate 15% tip on $85.50" }
-    ],
-    tools: [{
-      type: "function",
-      name: "calculate",
-      description: "Perform calculations",
-      parameters: {
-        type: "object",
-        properties: {
-          expression: { type: "string" }
-        },
-        required: ["expression"]
-      }
-    }],
-    reasoning: { effort: "medium" },
-    temperature: 0.7
-  })
-});
+A function call appears as an output item. Persist the full prior input and output items, execute the function, then send the history plus a matching `function_call_output`:
 
-const data = await response.json();
-console.log(data.output_text);  // Final text response
-console.log(data.output);       // Full output items including tool calls
+```json
+{
+  "input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": "What is the weather in Boston?"
+    },
+    {
+      "type": "function_call",
+      "id": "item_123",
+      "call_id": "call_123",
+      "name": "get_weather",
+      "arguments": "{\"location\":\"Boston\"}",
+      "status": "completed"
+    },
+    {
+      "type": "function_call_output",
+      "call_id": "call_123",
+      "output": "{\"temperature_f\":68,\"conditions\":\"clear\"}"
+    }
+  ]
+}
 ```
+
+The caller remains responsible for authentication, authorization, schema validation, timeouts, idempotency, and side-effect approval for user-defined functions.
+
+## Responses-compatible built-in tool shapes
+
+The live Responses schema can also recognize OpenAI-style built-in/provider tool shapes such as `web_search` variants, `file_search`, `computer_use_preview`, `code_interpreter`, `mcp`, `image_generation`, `local_shell`, `shell`, `apply_patch`, `custom`, and `namespace`. These are distinct from OpenRouter's `openrouter:*` server tools, and availability, execution semantics, required credentials, output items, and provider support vary. Inspect the exact tool schema and selected endpoint before emitting one; do not infer its contract from the type name.
+
+## OpenRouter server tools
+
+Server tools are declared in `tools` with an `openrouter:` type. OpenRouter can execute them during the request. Example:
+
+```json
+{
+  "tools": [
+    { "type": "openrouter:web_search" },
+    { "type": "openrouter:web_fetch" }
+  ]
+}
+```
+
+Some server tools, such as `openrouter:apply_patch` and `openrouter:shell`, are Responses-only or have surface-specific behavior. Verify each tool's current documentation. `openrouter:apply_patch` validates and returns a patch; it does **not** apply changes to the caller's filesystem.
+
+See [tool-calling.md](tool-calling.md).
+
+## Structured text output
+
+Responses places the output format under `text.format`:
+
+```json
+{
+  "text": {
+    "format": {
+      "type": "json_schema",
+      "name": "answer",
+      "strict": true,
+      "schema": {
+        "type": "object",
+        "properties": {
+          "answer": { "type": "string" }
+        },
+        "required": ["answer"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "provider": {
+    "require_parameters": true
+  }
+}
+```
+
+Do not copy Chat Completions' `response_format.json_schema` wrapper into Responses without translating it to the current Responses schema.
+
+## Reasoning
+
+Use the same unified OpenRouter reasoning controls where accepted:
+
+```json
+{
+  "reasoning": {
+    "effort": "high",
+    "exclude": false
+  }
+}
+```
+
+Reasoning output may appear as typed `reasoning` items with summary, content, encrypted content, signatures, and status. Preserve opaque fields exactly when continuing a conversation.
+
+## Response shape
+
+A completed response typically contains:
+
+```json
+{
+  "id": "resp_...",
+  "object": "response",
+  "created_at": 0,
+  "status": "completed",
+  "model": "resolved-author/concrete-model",
+  "output": [
+    {
+      "type": "message",
+      "id": "msg_...",
+      "role": "assistant",
+      "phase": "final_answer",
+      "status": "completed",
+      "content": [
+        { "type": "output_text", "text": "...", "annotations": [] }
+      ]
+    }
+  ],
+  "output_text": "...",
+  "usage": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "total_tokens": 0,
+    "input_tokens_details": { "cached_tokens": 0 },
+    "output_tokens_details": { "reasoning_tokens": 0 },
+    "cost": 0
+  }
+}
+```
+
+Possible output item types include messages, function calls, reasoning, web-search calls, server-tool calls, images, patches, shell calls, and future additive types. Decode by `type` and ignore unknown fields rather than failing the entire response. Preserve message `phase` when carrying an output message into the next stateless request.
+
+Do not use `output_text` as the only source when tools, images, annotations, or other item types matter.
+
+## Status and incomplete responses
+
+Handle at least:
+
+- `completed` — normal terminal success;
+- `incomplete` — inspect incomplete details, such as output limit or content filtering;
+- `failed` — inspect top-level error and `error_type`;
+- `cancelled` — request was cancelled;
+- `in_progress` / queued states if introduced by a specialized workflow.
+
+The schema can grow; do not treat an unknown status as success.
 
 ## Streaming
 
-```typescript
+Set:
+
+```json
+{ "stream": true }
+```
+
+Responses streams named SSE events, for example lifecycle, output-item, text-delta, reasoning, tool, completion, and failure events. Event names and payloads are more expressive than Chat Completion chunks.
+
+A robust client must:
+
+1. parse SSE framing, not individual TCP/newline chunks;
+2. preserve the event name as well as the `data` payload;
+3. apply deltas to the matching item/content indices;
+4. stop on a terminal completed/failed/cancelled event or `[DONE]`;
+5. inspect top-level `error_type` on `response.failed`;
+6. retain unknown events for forward-compatible telemetry rather than crashing.
+
+Use an official SDK event parser when possible. See [streaming.md](streaming.md).
+
+## Router metadata and response caching
+
+- Send `X-OpenRouter-Metadata: enabled` to receive `openrouter_metadata` in successful/error responses and near the terminal stream event.
+- Send `X-OpenRouter-Cache: true` to make an identical successful Responses request eligible for OpenRouter edge response caching.
+- Response caching is separate from provider prompt caching and is unavailable under account-level ZDR.
+- A cache hit intentionally omits router metadata and returns a fresh generation ID for the replay.
+
+## Debugging
+
+For a non-production diagnostic request:
+
+```json
 {
-  stream: true
+  "stream": true,
+  "debug": {
+    "echo_upstream_body": true
+  }
 }
 ```
 
-Streams output items incrementally using SSE format, similar to Chat Completions streaming.
+The debug option is ignored for non-streaming requests. In a stream, the API can expose the normalized body sent to the provider. This may include sensitive prompt/tool data. Never enable it by default or log the echoed body in production.
 
-## Key Differences from Chat Completions
+## Migration notes
 
-| Feature | Chat Completions | Responses API |
-|---------|-----------------|---------------|
-| State | Stateful conversation | Stateless |
-| Input format | `messages` array | `input` (string or items) |
-| System prompt | `messages` with `system` role | `instructions` field |
-| Output | `choices[0].message` | `output` array + `output_text` |
-| Token fields | `prompt_tokens`, `completion_tokens` | `input_tokens`, `output_tokens` |
+### From Chat Completions
 
-## When to Use
+| Chat Completions | Responses |
+|---|---|
+| `messages` | `input` typed items |
+| system/developer message | `instructions` or typed message item |
+| `max_tokens` / `max_completion_tokens` | `max_output_tokens` |
+| `response_format` | `text.format` |
+| `choices[0].message` | `output[]` items |
+| `choices[0].delta` | named item/content delta events |
+| `prompt_tokens` / `completion_tokens` | `input_tokens` / `output_tokens` |
+| nested function definition | flat Responses function definition |
+| `role: tool` | `function_call_output` item |
 
-- Stateless transformations
-- Simple request/response workflows
-- When you don't need conversation history management
-- OpenAI Responses API compatibility
+### From OpenAI's stateful conveniences
+
+Persist all conversation and tool state in your own application. Treat `id` values as correlation IDs, not durable conversation handles.
+
+## Common failure modes
+
+### Sending only a previous response ID
+
+Fix: persist and resend the required history explicitly.
+
+### Mixing Chat tool shapes into Responses
+
+Fix: use the flat Responses function definition and `function_call_output` items.
+
+### Reading only `output_text`
+
+Fix: iterate typed `output` items whenever tools, citations, images, reasoning, or status matter.
+
+### Treating any SSE payload as a Chat chunk
+
+Fix: dispatch on the Responses event name and item indices.
+
+### Depending on a beta field without a boundary
+
+Fix: isolate Responses payload translation behind a versioned adapter and add contract tests against a captured live response/OpenAPI schema.

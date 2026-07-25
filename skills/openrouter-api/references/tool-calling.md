@@ -1,254 +1,372 @@
-# Tool Calling (Function Calling)
+# Tool Calling and Server Tools
 
-## Overview
+OpenRouter supports three distinct extension mechanisms. Choosing the wrong one is a common source of broken agent loops and unsafe side effects.
 
-Tool calling allows models to request execution of functions you define. The process involves:
-1. Define tools and send initial request
-2. Model returns tool calls with arguments
-3. Execute tools locally and return results
-4. Model generates final response
+| Mechanism | Declared in | Who executes it? | Invocation count |
+|---|---|---|---|
+| User-defined function tool | `tools` | Your application | Model may request 0-N calls |
+| OpenRouter server tool | `tools` with `openrouter:*` type | OpenRouter, except human-in-loop outputs such as patches | Model may request 0-N calls |
+| Plugin | `plugins` | OpenRouter pipeline | Runs once when enabled/needed |
 
-## Tool Definition
+## User-defined function tools
 
-```typescript
+A function tool describes a capability; it does not expose an implementation to the model.
+
+### Chat Completions shape
+
+```json
 {
-  tools: [{
-    type: "function",
-    function: {
-      name: "get_weather",
-      description: "Get current weather for a location",
-      parameters: {
-        type: "object",
-        properties: {
-          location: {
-            type: "string",
-            description: "City name, e.g., 'San Francisco, CA'"
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Get current weather for a city.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": { "type": "string" },
+            "units": {
+              "type": "string",
+              "enum": ["celsius", "fahrenheit"]
+            }
           },
-          unit: {
-            type: "string",
-            enum: ["celsius", "fahrenheit"],
-            description: "Temperature unit"
-          }
+          "required": ["city"],
+          "additionalProperties": false
         },
-        required: ["location"]
-      },
-      strict: true  // Enable strict schema validation (optional)
-    }
-  }]
-}
-```
-
-## Tool Choice Options
-
-```typescript
-{
-  tool_choice: "auto",      // Model decides (default)
-  tool_choice: "none",      // Disable tool calling
-  tool_choice: "required",  // Force at least one tool call
-  tool_choice: {            // Force specific tool
-    type: "function",
-    function: { name: "get_weather" }
-  },
-
-  parallel_tool_calls: true  // Allow multiple simultaneous calls (default)
-}
-```
-
-## Complete Example
-
-### Step 1: Initial Request
-
-```typescript
-const tools = [{
-  type: "function",
-  function: {
-    name: "search_products",
-    description: "Search for products in the catalog",
-    parameters: {
-      type: "object",
-      properties: {
-        query: { type: "string", description: "Search query" },
-        category: { type: "string", enum: ["electronics", "clothing", "books"] },
-        max_price: { type: "number", description: "Maximum price in USD" }
-      },
-      required: ["query"]
-    }
-  }
-}];
-
-const response1 = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-  method: "POST",
-  headers: {
-    "Authorization": `Bearer ${API_KEY}`,
-    "Content-Type": "application/json"
-  },
-  body: JSON.stringify({
-    model: "openai/gpt-5.2",
-    messages: [
-      { role: "user", content: "Find me a laptop under $1000" }
-    ],
-    tools
-  })
-});
-
-const data1 = await response1.json();
-```
-
-### Step 2: Check for Tool Calls
-
-```typescript
-const message = data1.choices[0].message;
-
-if (message.tool_calls) {
-  // Model wants to call tools
-  const toolResults = [];
-
-  for (const toolCall of message.tool_calls) {
-    const args = JSON.parse(toolCall.function.arguments);
-
-    // Execute your function
-    let result;
-    if (toolCall.function.name === "search_products") {
-      result = await searchProducts(args.query, args.category, args.max_price);
-    }
-
-    toolResults.push({
-      role: "tool",
-      tool_call_id: toolCall.id,
-      content: JSON.stringify(result)
-    });
-  }
-}
-```
-
-### Step 3: Send Results Back
-
-```typescript
-const response2 = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-  method: "POST",
-  headers: {
-    "Authorization": `Bearer ${API_KEY}`,
-    "Content-Type": "application/json"
-  },
-  body: JSON.stringify({
-    model: "openai/gpt-5.2",
-    messages: [
-      { role: "user", content: "Find me a laptop under $1000" },
-      message,        // Include the assistant's tool_calls message
-      ...toolResults  // Include all tool results
-    ],
-    tools  // Include tools in every request
-  })
-});
-
-const data2 = await response2.json();
-console.log(data2.choices[0].message.content);
-```
-
-## Agentic Loop Pattern
-
-For multi-step tool use:
-
-```typescript
-async function agentLoop(userMessage, maxIterations = 10) {
-  const messages = [{ role: "user", content: userMessage }];
-
-  for (let i = 0; i < maxIterations; i++) {
-    const response = await callOpenRouter(messages, tools);
-    const assistantMessage = response.choices[0].message;
-    messages.push(assistantMessage);
-
-    if (!assistantMessage.tool_calls) {
-      // No more tool calls, return final response
-      return assistantMessage.content;
-    }
-
-    // Execute tool calls
-    for (const toolCall of assistantMessage.tool_calls) {
-      const result = await executeFunction(
-        toolCall.function.name,
-        JSON.parse(toolCall.function.arguments)
-      );
-
-      messages.push({
-        role: "tool",
-        tool_call_id: toolCall.id,
-        content: JSON.stringify(result)
-      });
-    }
-  }
-
-  throw new Error("Max iterations reached");
-}
-```
-
-## Streaming with Tool Calls
-
-Tool calls stream as deltas:
-
-```typescript
-const stream = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-  method: "POST",
-  headers: {
-    "Authorization": `Bearer ${API_KEY}`,
-    "Content-Type": "application/json"
-  },
-  body: JSON.stringify({
-    model: "openai/gpt-5.2",
-    messages: [...],
-    tools,
-    stream: true
-  })
-});
-
-// Accumulate tool call deltas
-let toolCalls = {};
-
-for await (const chunk of parseSSE(stream)) {
-  const delta = chunk.choices[0].delta;
-
-  if (delta.tool_calls) {
-    for (const tc of delta.tool_calls) {
-      if (!toolCalls[tc.index]) {
-        toolCalls[tc.index] = { id: tc.id, function: { name: "", arguments: "" } };
+        "strict": true
       }
-      if (tc.function?.name) toolCalls[tc.index].function.name += tc.function.name;
-      if (tc.function?.arguments) toolCalls[tc.index].function.arguments += tc.function.arguments;
     }
+  ],
+  "tool_choice": "auto",
+  "parallel_tool_calls": true,
+  "provider": {
+    "require_parameters": true
   }
 }
 ```
 
-## Interleaved Thinking
+### Responses shape
 
-Some models support reasoning between tool calls. Enable with Anthropic beta header:
+Responses uses a flat function definition:
 
-```typescript
-headers: {
-  "x-anthropic-beta": "interleaved-thinking-2025-05-14"
+```json
+{
+  "tools": [
+    {
+      "type": "function",
+      "name": "get_weather",
+      "description": "Get current weather for a city.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "city": { "type": "string" }
+        },
+        "required": ["city"],
+        "additionalProperties": false
+      },
+      "strict": true
+    }
+  ]
 }
 ```
 
-The model can reason about tool results before deciding next steps.
+Do not copy one shape into the other endpoint.
 
-## Models with Strong Tool Support
+## Tool-choice controls
 
-For optimal tool-calling accuracy, consider:
-- OpenAI GPT-5.x models
-- Anthropic Claude 4.x models
-- Google Gemini 3 models
-- Models with `:exacto` suffix (curated for tool accuracy)
+Current common controls include:
 
-Use `:exacto` suffix for higher tool-calling accuracy:
-```typescript
-model: "moonshotai/kimi-k2-0905:exacto"
+```json
+{ "tool_choice": "auto" }
+{ "tool_choice": "none" }
+{ "tool_choice": "required" }
 ```
 
-## Best Practices
+To force a named function in Chat Completions:
 
-1. **Clear descriptions**: Write detailed function and parameter descriptions
-2. **Strict schemas**: Use `strict: true` for JSON schema validation
-3. **Error handling**: Return meaningful error messages in tool results
-4. **Timeout handling**: Implement timeouts for tool execution
-5. **Result format**: Keep tool results concise and structured
-6. **Idempotency**: Design tools to be safely re-callable
+```json
+{
+  "tool_choice": {
+    "type": "function",
+    "function": { "name": "get_weather" }
+  }
+}
+```
+
+Responses uses its own tool-choice object. Inspect the current schema rather than translating the Chat object verbatim.
+
+`parallel_tool_calls: true` allows the model to request several calls in one turn. Your application must return one result for every call ID, including failures.
+
+## The safe Chat Completions loop
+
+1. Send conversation plus tool definitions.
+2. Append the assistant message exactly as returned.
+3. Validate every tool name and argument object against a local allowlist/schema.
+4. Authorize the operation for the current user/tenant.
+5. Execute with timeout, output-size, network, and side-effect limits.
+6. Append one `role: "tool"` result for each `tool_call_id`.
+7. Preserve `reasoning_details` exactly on the assistant message.
+8. Call the model again.
+9. Stop on a final response or a configured step/cost/time limit.
+
+### Bounded TypeScript pattern
+
+```typescript
+type ChatMessage = Record<string, unknown>;
+
+type Limits = {
+  maxSteps: number;
+  maxToolCalls: number;
+  maxToolResultChars: number;
+};
+
+async function runAgent(
+  initialMessages: ChatMessage[],
+  tools: unknown[],
+  limits: Limits,
+): Promise<string> {
+  const messages = [...initialMessages];
+  let totalToolCalls = 0;
+
+  for (let step = 0; step < limits.maxSteps; step += 1) {
+    const response = await callOpenRouter({
+      messages,
+      tools,
+      tool_choice: "auto",
+      parallel_tool_calls: true,
+      provider: { require_parameters: true },
+    });
+
+    const assistant = response.choices?.[0]?.message;
+    if (!assistant) throw new Error("OpenRouter returned no assistant message");
+
+    // Preserve content, tool_calls, reasoning_details, and any opaque fields.
+    messages.push(assistant);
+
+    const calls = assistant.tool_calls ?? [];
+    if (calls.length === 0) return assistant.content ?? "";
+
+    totalToolCalls += calls.length;
+    if (totalToolCalls > limits.maxToolCalls) {
+      throw new Error("Tool-call budget exceeded");
+    }
+
+    const results = await Promise.all(
+      calls.map(async (call: any) => {
+        const name = call.function?.name;
+        const rawArguments = call.function?.arguments ?? "{}";
+        const parsed = JSON.parse(rawArguments);
+
+        // validateAndAuthorize must reject unknown tools/fields and enforce
+        // tenant/user permissions before executeTool performs side effects.
+        const args = validateAndAuthorize(name, parsed);
+        const value = await executeToolWithTimeout(name, args, 15_000);
+        const serialized = JSON.stringify(value);
+
+        if (serialized.length > limits.maxToolResultChars) {
+          throw new Error(`Tool result too large: ${name}`);
+        }
+
+        return {
+          role: "tool",
+          tool_call_id: call.id,
+          content: serialized,
+        };
+      }),
+    );
+
+    messages.push(...results);
+  }
+
+  throw new Error("Agent step limit exceeded");
+}
+```
+
+Production code must also bound total elapsed time, model cost/tokens, retries, and concurrent side effects.
+
+## Tool result errors
+
+A tool execution failure should usually be returned as a concise structured result so the model can recover:
+
+```json
+{
+  "role": "tool",
+  "tool_call_id": "call_123",
+  "content": "{\"ok\":false,\"error\":{\"type\":\"timeout\",\"message\":\"Weather service timed out\"}}"
+}
+```
+
+Do not expose stack traces, credentials, internal hostnames, SQL, or unrelated user data. If retrying the tool is unsafe, say so in the result.
+
+## Preserving reasoning state
+
+Reasoning models can return `reasoning_details` containing plaintext, summaries, encrypted data, signatures, and provider-specific formats. During a tool loop:
+
+- preserve the entire array;
+- preserve order and consecutive blocks;
+- do not strip fields that look opaque;
+- do not merge blocks from different responses;
+- do not fabricate reasoning for a reconstructed assistant message.
+
+The assistant tool-call message should be stored and replayed as a whole. This is especially important when a model pauses an extended-thinking response to request a tool.
+
+## Streaming tool calls
+
+Chat Completions streams tool calls as indexed deltas. Accumulate each field by index:
+
+```typescript
+const calls = new Map<number, {
+  id?: string;
+  type?: string;
+  function: { name: string; arguments: string };
+}>();
+
+function applyToolDelta(delta: any): void {
+  for (const part of delta.tool_calls ?? []) {
+    const current = calls.get(part.index) ?? {
+      function: { name: "", arguments: "" },
+    };
+
+    if (part.id) current.id = part.id;
+    if (part.type) current.type = part.type;
+    if (part.function?.name) current.function.name += part.function.name;
+    if (part.function?.arguments) {
+      current.function.arguments += part.function.arguments;
+    }
+
+    calls.set(part.index, current);
+  }
+}
+```
+
+Do not parse `arguments` until the call is complete. A partial JSON string is expected while streaming.
+
+## Responses-compatible built-in tool shapes
+
+In addition to caller functions, the current Responses schema includes OpenAI-style built-in/provider tool shapes such as `web_search`, `file_search`, `computer_use_preview`, `code_interpreter`, `mcp`, `image_generation`, `local_shell`, `shell`, `apply_patch`, `custom`, and `namespace`. They are not aliases for the `openrouter:*` tools below. Treat each as a separate, evolving contract and verify its input schema, output items, approval model, and endpoint/provider support in the live OpenAPI.
+
+## OpenRouter server tools
+
+Server tools use an `openrouter:` type and can be invoked by the model during a request:
+
+```json
+{
+  "tools": [
+    { "type": "openrouter:web_search" },
+    { "type": "openrouter:web_fetch" },
+    { "type": "openrouter:datetime" }
+  ]
+}
+```
+
+OpenRouter's documentation currently lists tools in these families:
+
+| Type | Purpose |
+|---|---|
+| `openrouter:web_search` | Search current web information |
+| `openrouter:web_fetch` | Fetch and extract URL content |
+| `openrouter:datetime` | Obtain current date/time context |
+| `openrouter:image_generation` | Generate images during a model workflow |
+| `openrouter:experimental__search_models` | Discover/select OpenRouter models |
+| `openrouter:advisor` | Consult a configured advisor model |
+| `openrouter:subagent` | Delegate work to a sub-agent |
+| `openrouter:fusion` | Multi-model deliberation |
+| `openrouter:apply_patch` | Produce a validated V4A patch for the caller to apply |
+| `openrouter:shell` | Execute a constrained server-side shell workflow where supported |
+| `openrouter:files` | Read, write, edit, and list workspace files; requires explicit file-tool opt-in |
+
+Server tools are beta and surface-specific. Some are Responses-only. Always open the current tool guide and OpenAPI before using configuration fields.
+
+The Files server tool requires the request header `x-openrouter-file-ids: openrouter`. Scope workspace access carefully, and do not assume that adding a file ID to another inference shape grants the same read/write behavior. The live OpenAPI can expose additional beta or compatibility tool types such as `openrouter:bash`; inspect their exact schemas instead of inferring behavior from the prefix.
+
+### Bound server-tool loops
+
+Use top-level server-tool controls where the current schema supports them:
+
+```json
+{
+  "max_tool_calls": 8,
+  "stop_server_tools_when": [
+    { "type": "max_cost", "max_cost_in_dollars": 0.25 }
+  ]
+}
+```
+
+`max_tool_calls` limits outer server-tool steps. `stop_server_tools_when` supports richer stop conditions and can take precedence over a simple count according to the current beta schema. Advisor, sub-agent, and fusion tools can also expose their own nested budgets. Do not copy default/max values into production validation without checking the current tool guide.
+
+### Server-tool safety
+
+- Set explicit tool-call, token, cost, and elapsed-time budgets.
+- Restrict nested tools offered to advisor/sub-agent workflows.
+- Treat fetched web content as untrusted data, not instructions.
+- Do not assume server-generated patches have been applied.
+- Review and sandbox shell/patch effects.
+- Preserve citations/annotations returned by search/fetch tools.
+- Log which server tools ran through router metadata, but not sensitive tool payloads.
+
+## Web search: server tool vs plugin
+
+New agentic integrations should prefer:
+
+```json
+{
+  "tools": [{ "type": "openrouter:web_search" }]
+}
+```
+
+The model can choose when and how often to search. The legacy `web` plugin and `:online` suffix still run a one-shot grounding transform and may be simpler for a non-agentic request, but the plugin is deprecated in favor of the server tool.
+
+## Apply Patch is human-in-the-loop
+
+`openrouter:apply_patch` is a Responses-only server tool that asks a model to produce a V4A diff and has OpenRouter validate the patch syntax. OpenRouter does not write to the caller's filesystem.
+
+A safe caller must:
+
+1. parse the returned patch item;
+2. reject absolute/traversal paths and out-of-scope files;
+3. show or review the diff when policy requires it;
+4. apply in a sandbox/worktree;
+5. run tests/static checks;
+6. return an `apply_patch_call_output` item describing success/failure.
+
+## Plugins are not tools
+
+Plugins run once as request/response transforms. Examples include PDF parsing, response healing, and context compression. Do not wait for a plugin `tool_call`, and do not send a tool result for one.
+
+See [plugins-features.md](plugins-features.md).
+
+## Tool design guidance
+
+### Good tool schemas
+
+- Use a single, stable action per tool.
+- Write descriptions that state preconditions and side effects.
+- Use enums and `additionalProperties: false`.
+- Prefer IDs over free-form names after a search step.
+- Separate read operations from write/delete operations.
+- Return compact structured data, not entire databases or HTML pages.
+
+### Idempotency
+
+For mutations, accept or derive an idempotency key and persist the result. Model retries can repeat a tool call even when the previous HTTP response was lost.
+
+### Confirmation boundaries
+
+Require explicit human approval for destructive, financial, security-sensitive, or irreversible operations. The model's `tool_call` is a proposal, not authorization.
+
+### Untrusted tool output
+
+Tool results can contain prompt injection. Delimit and label them as data, minimize content, and keep system policy outside the tool result. Never grant additional tools because fetched content asks for them.
+
+## Common mistakes
+
+- Executing a tool name that is not in an allowlist.
+- Trusting JSON arguments without schema validation.
+- Returning tool results without matching `tool_call_id` / `call_id`.
+- Dropping the assistant tool-call message from the next request.
+- Dropping or editing `reasoning_details`.
+- Parsing streamed arguments before the final delta.
+- Allowing unbounded recursive server tools/sub-agents.
+- Applying an `apply_patch` result without review and tests.
+- Treating `:online` as equivalent to a multi-step search agent.

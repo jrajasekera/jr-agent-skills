@@ -41,6 +41,50 @@ Codex is strongest at checking a plan against concrete code: whether file paths,
 
 Codex adds little value — and may return shallow feedback — when the plan references external systems it cannot access (third-party APIs, databases, services), is highly abstract with few concrete code references, or targets a greenfield project with no existing code to compare against. If feedback comes back shallow, add concrete file paths, symbols, or snippets to the plan and re-run rather than trusting a thin review.
 
+## Select Model and Effort
+
+Do not use the Codex defaults. Pick a review tier for every run by scoring the plan on two independent axes, then map to a model and reasoning effort.
+
+**Complexity** — how hard the plan is to reason about:
+
+| Level | Signals |
+|---|---|
+| Low | One file or one small module, one obvious approach, no new dependencies, no cross-cutting behavior. |
+| Moderate | A few files inside one subsystem, some genuinely new logic or a new dependency, but follows established repo patterns. |
+| High | Many files or several subsystems, new abstractions or architecture, concurrency/async, schema or data migration, multi-step rollout. |
+| Extra-high | Cross-cutting redesign, distributed or stateful coordination, large migration with backfill, novel algorithm, or correctness that cannot be checked locally. |
+
+**Impact** — what happens if the plan is wrong:
+
+| Level | Signals |
+|---|---|
+| Inconsequential | Caught immediately, trivially reversible, confined to local dev, docs, or tooling. |
+| Moderate | Costs rework or a broken feature branch; user-visible bug on a non-critical path; reversible with a normal fix. |
+| High | Production breakage, degraded experience for real users, hard-to-reverse interface or schema change, or significant wasted implementation time. |
+| Critical | Data loss or corruption, security/auth/privacy/payments exposure, irreversible migration, outage, or money and compliance consequences. |
+
+**Tier mapping:**
+
+| Tier | Complexity / Impact | Model | Effort |
+|---|---|---|---|
+| 1 | Low / Inconsequential | `gpt-5.6-terra` | `medium` |
+| 2 | Moderate / Moderate | `gpt-5.6-sol` | `low` |
+| 3 | High / High | `gpt-5.6-sol` | `medium` |
+| 4 | Extra-high / Critical | `gpt-5.6-sol` | `high` |
+
+**Resolving the gray areas.** The two axes rarely land on the same level, and plans rarely sit cleanly inside one description. Apply these rules in order:
+
+1. Score the axes independently, then take the **higher** of the two tiers. A simple change to a payments path is a high-impact review, not a low-complexity one.
+2. When a plan sits between two levels on an axis, **round up**. The cost of one tier too high is a slower review; the cost of one tier too low is a missed critical flaw.
+3. Impact overrides complexity at the top: **critical impact is always tier 4**, no matter how small the diff looks.
+4. Anything touching auth, permissions, payments, billing, PII, secrets, data migrations, or destructive/bulk deletion is **at least tier 3**.
+5. Multi-file or multi-subsystem work is **at least tier 2** — never send it to tier 1.
+6. Tier 1 is reserved for plans that were borderline worth reviewing at all (a trivial single-file change the user asked to review anyway). If you would have auto-run the review under the trigger rules, it is tier 2 or above.
+7. If the plan cannot be scored confidently — vague, unfamiliar subsystem, unclear blast radius — that uncertainty *is* risk. Use tier 3.
+8. An explicit user request for a specific model or effort wins over this whole section.
+
+State the chosen tier and the one-line reason before invoking, e.g. `Tier 3 (sol/medium): touches the auth session schema across 6 files.`
+
 ## Invoke Codex
 
 Use the Bash tool with these settings:
@@ -54,11 +98,19 @@ Run this from any directory; `-C` sets the Codex workspace root. `--sandbox read
 
 Inline the plan's contents into the prompt via `$(cat "$PLAN_PATH")` — never ask Codex to open the plan by path itself, since it may silently read the wrong file and review the wrong content.
 
+Pass the tier explicitly with `-m` and `-c model_reasoning_effort=…`. Both flags are required on every run so the review never silently inherits whatever is in `~/.codex/config.toml`.
+
 ```bash
 PROJECT_ROOT="/absolute/path/to/project/root"
 PLAN_PATH="/absolute/path/to/plan.md"
 
+# From the tier table above. Never omit these two.
+CODEX_MODEL="gpt-5.6-sol"     # gpt-5.6-terra (tier 1) | gpt-5.6-sol (tiers 2-4)
+CODEX_EFFORT="medium"         # medium (t1) | low (t2) | medium (t3) | high (t4)
+
 cat <<CODEX_REVIEW_PROMPT | codex exec -C "$PROJECT_ROOT" \
+  -m "$CODEX_MODEL" \
+  -c model_reasoning_effort="$CODEX_EFFORT" \
   --sandbox read-only \
   --skip-git-repo-check \
   --ephemeral \
@@ -145,6 +197,7 @@ Default flow:
 Rules:
 
 - Maximum 3 rounds total.
+- Re-use the round 1 tier for later rounds, with one exception: if the findings show the plan is riskier than you scored it (unnoticed migration, security surface, or blast radius), escalate one tier for the next round. Never de-escalate mid-review.
 - If the user requests a specific number of rounds, respect it but cap at 3.
 - Do not re-run for optional or stylistic feedback only.
 - If round 3 still has valid critical issues, stop and summarize the remaining risk.
@@ -172,7 +225,7 @@ Do not claim Codex reviewed the plan if the command failed or returned unusable 
 
 After the final review round, summarize:
 
-- Rounds run.
+- Rounds run, and the tier (model + effort) used for each.
 - Critical issues found and plan changes made.
 - Non-critical items applied, skipped, or awaiting decision.
 - Invalid Codex feedback ignored, if relevant.
@@ -183,6 +236,10 @@ Do not paste long raw Codex output unless the user asks for it.
 ## Pitfalls
 
 - Do not run Codex before saving the plan.
+- Do not omit `-m` and `-c model_reasoning_effort=…`; falling back to the config default silently reviews a critical plan at the cheapest setting.
+- Do not put `model_reasoning_effort` after the `-` stdin marker or pass it as `--reasoning-effort`; it is a `-c` config override and must precede `-`.
+- Do not pick tier 1 to save time on work that met the auto-run trigger rules.
+- Do not de-escalate the tier between rounds.
 - Do not omit the Bash tool `timeout: 1200000`.
 - Do not use shell `timeout`/`gtimeout` wrappers instead of the Bash tool timeout.
 - Do not ask Codex to read the plan by path; inline it via `$(cat "$PLAN_PATH")` so Codex reviews exactly the intended content.

@@ -51,39 +51,47 @@ Do not use the Codex defaults. Pick a review tier for every run by scoring the p
 |---|---|
 | Low | One file or one small module, one obvious approach, no new dependencies, no cross-cutting behavior. |
 | Moderate | A few files inside one subsystem, some genuinely new logic or a new dependency, but follows established repo patterns. |
+| Substantial | Several files crossing a subsystem boundary, a new component or interface other code will depend on, or logic with enough branching or state that correctness is not obvious by inspection. |
 | High | Many files or several subsystems, new abstractions or architecture, concurrency/async, schema or data migration, multi-step rollout. |
 | Extra-high | Cross-cutting redesign, distributed or stateful coordination, large migration with backfill, novel algorithm, or correctness that cannot be checked locally. |
+| Extreme | Several extra-high signals at once, a design with no established pattern to copy in this repo or its ecosystem, or failure modes that cannot be enumerated up front. |
 
 **Impact** — what happens if the plan is wrong:
 
 | Level | Signals |
 |---|---|
-| Inconsequential | Caught immediately, trivially reversible, confined to local dev, docs, or tooling. |
+| Minor | Caught immediately, trivially reversible, confined to local dev, docs, or tooling. |
 | Moderate | Costs rework or a broken feature branch; user-visible bug on a non-critical path; reversible with a normal fix. |
-| High | Production breakage, degraded experience for real users, hard-to-reverse interface or schema change, or significant wasted implementation time. |
+| Significant | Breaks a feature real users depend on, or forces a coordinated revert; recoverable within a normal release cycle but visible outside the team. |
+| Severe | Production breakage, degraded experience for real users, hard-to-reverse interface or schema change, or significant wasted implementation time. |
 | Critical | Data loss or corruption, security/auth/privacy/payments exposure, irreversible migration, outage, or money and compliance consequences. |
+| Catastrophic | Unrecoverable data destruction, a breach exposing user data or secrets, or a failure whose blast radius reaches past this system to customers, partners, or regulators. |
 
 **Tier mapping:**
 
 | Tier | Complexity / Impact | Model | Effort |
 |---|---|---|---|
-| 1 | Low / Inconsequential | `gpt-5.6-terra` | `medium` |
+| 1 | Low / Minor | `gpt-5.6-terra` | `medium` |
 | 2 | Moderate / Moderate | `gpt-5.6-sol` | `low` |
-| 3 | High / High | `gpt-5.6-sol` | `medium` |
-| 4 | Extra-high / Critical | `gpt-5.6-sol` | `high` |
+| 3 | Substantial / Significant | `gpt-5.6-sol` | `medium` |
+| 4 | High / Severe | `gpt-6-astra` | `low` |
+| 5 | Extra-high / Critical | `gpt-6-astra` | `medium` |
+| 6 | Extreme / Catastrophic | `gpt-6-astra` | `high` |
 
 **Resolving the gray areas.** The two axes rarely land on the same level, and plans rarely sit cleanly inside one description. Apply these rules in order:
 
 1. Score the axes independently, then take the **higher** of the two tiers. A simple change to a payments path is a high-impact review, not a low-complexity one.
 2. When a plan sits between two levels on an axis, **round up**. The cost of one tier too high is a slower review; the cost of one tier too low is a missed critical flaw.
-3. Impact overrides complexity at the top: **critical impact is always tier 4**, no matter how small the diff looks.
+3. Impact overrides complexity at the top: **critical impact is always at least tier 5, and catastrophic impact is always tier 6**, no matter how small the diff looks.
 4. Anything touching auth, permissions, payments, billing, PII, secrets, data migrations, or destructive/bulk deletion is **at least tier 3**.
 5. Multi-file or multi-subsystem work is **at least tier 2** — never send it to tier 1.
 6. Tier 1 is reserved for plans that were borderline worth reviewing at all (a trivial single-file change the user asked to review anyway). If you would have auto-run the review under the trigger rules, it is tier 2 or above.
 7. If the plan cannot be scored confidently — vague, unfamiliar subsystem, unclear blast radius — that uncertainty *is* risk. Use tier 3.
 8. An explicit user request for a specific model or effort wins over this whole section.
 
-State the chosen tier and the one-line reason before invoking, e.g. `Tier 3 (sol/medium): touches the auth session schema across 6 files.`
+The floors in rules 4-7 are minimums, not ceilings. Score the axes first; a plan that scores higher than its floor uses the higher tier.
+
+State the chosen tier and the one-line reason before invoking, e.g. `Tier 5 (astra/medium): auth session schema change across 6 files.`
 
 ## Invoke Codex
 
@@ -105,8 +113,8 @@ PROJECT_ROOT="/absolute/path/to/project/root"
 PLAN_PATH="/absolute/path/to/plan.md"
 
 # From the tier table above. Never omit these two.
-CODEX_MODEL="gpt-5.6-sol"     # gpt-5.6-terra (tier 1) | gpt-5.6-sol (tiers 2-4)
-CODEX_EFFORT="medium"         # medium (t1) | low (t2) | medium (t3) | high (t4)
+CODEX_MODEL="gpt-6-astra"     # gpt-5.6-terra (t1) | gpt-5.6-sol (t2-3) | gpt-6-astra (t4-6)
+CODEX_EFFORT="medium"         # medium (t1) | low (t2) | medium (t3) | low (t4) | medium (t5) | high (t6)
 
 cat <<CODEX_REVIEW_PROMPT | codex exec -C "$PROJECT_ROOT" \
   -m "$CODEX_MODEL" \

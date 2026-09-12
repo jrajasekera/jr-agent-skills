@@ -60,4 +60,4 @@ are not offline smoke tests. Report the exact checks and remaining gaps.
 - Keep `CLAUDE.md` a relative symlink to `AGENTS.md`, not a second instructions
   copy. Check it with `test -L CLAUDE.md` and `readlink CLAUDE.md`.
 - Use a short imperative commit subject; include validation and any breaking
-  behavior in the change description. Commit or push only when requested.
+  behavior in the change description. Push only when requested.

@@ -71,9 +71,9 @@ Do not use the Codex defaults. Pick a review tier for every run by scoring the p
 
 | Tier | Complexity / Impact | Model | Effort |
 |---|---|---|---|
-| 1 | Low / Minor | `gpt-5.6-terra` | `medium` |
-| 2 | Moderate / Moderate | `gpt-5.6-sol` | `low` |
-| 3 | Substantial / Significant | `gpt-5.6-sol` | `medium` |
+| 1 | Low / Minor | `gpt-6-sol` | `low` |
+| 2 | Moderate / Moderate | `gpt-6-sol` | `medium` |
+| 3 | Substantial / Significant | `gpt-6-sol` | `high` |
 | 4 | High / Severe | `gpt-6-astra` | `low` |
 | 5 | Extra-high / Critical | `gpt-6-astra` | `medium` |
 | 6 | Extreme / Catastrophic | `gpt-6-astra` | `high` |
@@ -113,8 +113,8 @@ PROJECT_ROOT="/absolute/path/to/project/root"
 PLAN_PATH="/absolute/path/to/plan.md"
 
 # From the tier table above. Never omit these two.
-CODEX_MODEL="gpt-6-astra"     # gpt-5.6-terra (t1) | gpt-5.6-sol (t2-3) | gpt-6-astra (t4-6)
-CODEX_EFFORT="medium"         # medium (t1) | low (t2) | medium (t3) | low (t4) | medium (t5) | high (t6)
+CODEX_MODEL="gpt-6-astra"     # gpt-6-sol (t1-3) | gpt-6-astra (t4-6)
+CODEX_EFFORT="medium"         # low (t1) | medium (t2) | high (t3) | low (t4) | medium (t5) | high (t6)
 
 cat <<CODEX_REVIEW_PROMPT | codex exec -C "$PROJECT_ROOT" \
   -m "$CODEX_MODEL" \
